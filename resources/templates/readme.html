@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{APP_NAME}} · Win2Mac 使用说明</title>
+<style>
+  :root { color-scheme: light; --ink:#17181c; --muted:#666860; --line:#e3e1da; --paper:#f7f6f2; --card:#fff; --accent:#1c7c54; --warn:#a16207; --bad:#b42318; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; }
+  main { max-width:860px; margin:0 auto; padding:56px 28px 80px; }
+  .eyebrow { font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700; }
+  h1 { font-size:40px; letter-spacing:-.035em; line-height:1.15; margin:10px 0 8px; }
+  .sub { color:var(--muted); font-size:16px; margin:0 0 28px; }
+  .badge { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); background:#fff; border-radius:999px; padding:6px 12px; font-size:13px; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:22px 0 30px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .stat b { display:block; font-size:20px; letter-spacing:-.02em; }
+  .stat span { color:var(--muted); font-size:12px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px; margin:0 0 16px; }
+  h2 { font-size:18px; letter-spacing:-.02em; margin:0 0 12px; }
+  h3 { font-size:15px; margin:18px 0 8px; }
+  p { margin:8px 0; }
+  ol, ul { margin:8px 0; padding-left:22px; }
+  li { margin:7px 0; }
+  code { background:#f2f0ea; border:1px solid var(--line); border-radius:6px; padding:1px 6px; font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  pre { background:#17181c; color:#e9e7df; padding:16px; border-radius:12px; overflow:auto; font:12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.65; }
+  .note { background:#f4faf6; border:1px solid #cfe8d9; color:#175d40; border-radius:12px; padding:14px 16px; }
+  .warn { background:#fff8e8; border:1px solid #f0dca8; color:#7a5206; border-radius:12px; padding:14px 16px; }
+  .danger { background:#fff4f2; border:1px solid #f3c9c2; color:#8f1d13; border-radius:12px; padding:14px 16px; }
+  .reasons { display:flex; flex-direction:column; gap:8px; }
+  .reason { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .reason b { font-size:14px; }
+  .reason p { color:var(--muted); font-size:13px; margin:3px 0 0; }
+  .reason.block { border-color:#f3c9c2; background:#fff8f7; }
+  .reason.warn { border-color:#f0dca8; background:#fffaf0; }
+  .muted { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { border-top:1px solid var(--line); padding:9px 4px; vertical-align:top; }
+  td:first-child { color:var(--muted); width:34%; }
+  footer { text-align:center; color:var(--muted); font-size:12px; margin-top:30px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Win2Mac Studio · macOS App Bundle</div>
+  <h1>{{APP_NAME}}</h1>
+  <p class="sub">Windows {{APP_VERSION}} · {{PUBLISHER}}</p>
+  <span class="badge">兼容性 {{GRADE}} · {{GRADE_LABEL}}</span>
+
+  <div class="grid">
+    <div class="stat"><b>{{FILE_COUNT}}</b><span>原样打包文件</span></div>
+    <div class="stat"><b>{{PAYLOAD_SIZE}}</b><span>应用文件体积</span></div>
+    <div class="stat"><b>{{BUILD_DATE}}</b><span>打包时间</span></div>
+  </div>
+
+  <section>
+    <h2>第一步：启动</h2>
+    <ol>
+      <li>把 ZIP 完整解压到“应用程序”或任意本地文件夹，不要直接在压缩包里运行。</li>
+      <li><strong>请在 macOS 上用访达解压 ZIP。</strong>Windows 资源管理器解压会丢失 .app 与 .command 的执行权限。</li>
+      <li>双击 <code>Open-Win2Mac-App.command</code>。它会移除隔离标记、修复执行权限并打开 .app。</li>
+      <li>如果 macOS 提示“无法验证开发者”：macOS 14 及更早版本可右键该 .command → 打开；<strong>macOS 15/26 请到“系统设置 → 隐私与安全性”点“仍要打开”</strong>。</li>
+      <li>首次启动会初始化 Wine 环境，可能还需要下载运行时，请保持网络连接并耐心等待。</li>
+    </ol>
+    <div class="note">首次启动可能需要 30 秒到数分钟。如果安装包未内置引擎，首次启动还需下载 Wine；进度与错误会写入 <code>~/Library/Logs/Win2Mac/{{APP_ID}}.log</code>。</div>
+    <pre>如果 .command 无法双击，或你曾在 Windows 上解压过 ZIP：
+
+chmod +x Open-Win2Mac-App.command
+bash Open-Win2Mac-App.command
+
+或手动：
+xattr -dr com.apple.quarantine "{{APP_PATH}}"
+chmod +x "{{APP_PATH}}/Contents/MacOS/launcher"
+open "{{APP_PATH}}"</pre>
+  </section>
+
+  {{INSTALLER_BLOCK}}
+
+  <section>
+    <h2>运行方式与兼容边界</h2>
+    <p>这个 .app 是<strong>原 Windows 程序 + Wine 兼容层</strong>的封装，不是重新编译的原生 macOS 版本。应用文件逐字节保持不变；是否能完整运行取决于 Wine 对该程序的兼容性。</p>
+    <p><strong>预计：{{GRADE_LABEL}}</strong> · {{GRADE_SUMMARY}}</p>
+    <div class="reasons">{{REASONS}}</div>
+    <h3>推荐引擎</h3>
+    <p>{{ENGINE_NOTE}}</p>
+    <h3>已知限制</h3>
+    <ul>
+      <li>Wine 不能加载 Windows 内核驱动（.sys），也不支持大多数反作弊服务。</li>
+      <li>依赖 DRM/激活服务、Windows 服务、IE 插件或 UWP/MSIX 的程序通常无法运行。</li>
+      <li>不保证 100% 功能与性能；游戏建议使用 Apple GPTK 或 CrossOver 的 D3DMetal。媒体播放应用可能需要在 Mac 上安装 GStreamer。</li>
+      <li>此安装包未使用 Apple Developer ID 签名/公证，因此需要上面的手动打开步骤。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>完整性</h2>
+    <p>打包时已为每个应用文件计算 SHA-256，并记录在 <code>manifest.sha256</code>。你可以在 Mac 上再次校验：</p>
+    <pre>双击 Verify-Integrity.command
+
+或：
+cd "{{APP_PATH}}/Contents/Resources/win2mac/payload"
+shasum -a 256 -c ../manifest.sha256</pre>
+    <p class="muted">打包清单：{{MANIFEST_LINE}}</p>
+    <table>
+      <tr><td>Bundle ID</td><td><code>{{BUNDLE_ID}}</code></td></tr>
+      <tr><td>运行环境</td><td>{{ENGINE}}</td></tr>
+      <tr><td>注册表快照</td><td>{{REGISTRY_COUNT}} 项</td></tr>
+      <tr><td>附带运行时</td><td>{{RUNTIME_LIST}}</td></tr>
+      <tr><td>Wine 前缀</td><td><code>{{PREFIX_PATH}}</code></td></tr>
+      <tr><td>Windows 源路径</td><td><code>{{SOURCE_PATH}}</code></td></tr>
+    </table>
+  </section>
+
+  {{WARNINGS_BLOCK}}
+
+  <section>
+    <h2>一键诊断（推荐先运行）</h2>
+    <p>双击 <code>Start-Mac-Validation.command</code>。它会检查系统、Rosetta、Gatekeeper、引擎、完整性，并尝试启动 .app；结束后在桌面生成：</p>
+    <pre>~/Desktop/Win2Mac-验证日志-日期-时间.log
+~/Desktop/Win2Mac-诊断-日期-时间.zip</pre>
+    <p>把桌面上的 <b>Win2Mac-诊断-*.zip</b> 发回给打包者即可。诊断包包含完整日志、系统信息和该应用的 Wine 日志，不包含应用文件本身。</p>
+    <div class="warn">日志可能包含本机用户名和安装路径；只发送给可信的打包者，不要公开上传。</div>
+  </section>
+
+  <section>
+    <h2>排障</h2>
+    <h3>应用闪退或没有窗口</h3>
+    <ol>
+      <li>打开日志：<code>~/Library/Logs/Win2Mac/{{APP_ID}}.log</code>，查看最后的错误。</li>
+      <li>双击 <code>Reset-Runtime.command</code> 重置运行环境后重试（会删除该应用的 Wine 数据）。</li>
+      <li>在 Mac 上安装 CrossOver 24+ 或 Apple Game Porting Toolkit 2，然后重新打开；启动器会自动优先复用它们。如果安装包被设为“仅复用引擎”，必须这样做。</li>
+      <li>仍无法运行时，可考虑 UTM/Parallels 运行 Windows 虚拟机，或寻找官方 Mac 版。</li>
+    </ol>
+    <div class="warn">如果应用带反作弊、内核驱动或 DRM，请勿在 Wine 中尝试绕过；这通常违反服务条款，也可能导致账号风险。</div>
+  </section>
+
+  <section>
+    <h2>卸载</h2>
+    <p>把 .app 与同目录的说明文件移到废纸篓，然后删除 Wine 数据目录：</p>
+    <pre>rm -rf "{{PREFIX_PATH}}"</pre>
+    <p class="muted">此操作仅影响本机 Wine 环境，不会修改原 Windows 电脑上的任何文件。</p>
+  </section>
+
+  <footer>
+    由 Win2Mac Studio {{PACKAGER_VERSION}} 生成 · {{BUILD_DATE}}<br>
+    Windows 应用及其商标归各自权利人所有；本工具不授予再分发权。Wine 采用 LGPL 许可证。
+  </footer>
+</main>
+</body>
+</html>

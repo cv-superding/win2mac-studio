@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Win2Mac Mac 验证工具</title>
+<style>
+  :root { color-scheme: light; --paper: #f7f6f2; --ink: #17181c; --muted: #686a63; --line: #e4e1d8; --lime: #c8f169; --green: #1f7a4d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.7 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 42px 28px 60px; }
+  .tag { display: inline-block; padding: 4px 10px; border-radius: 99px; background: #eaf6ee; color: var(--green); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+  h1 { font-size: 34px; letter-spacing: -.04em; margin: 16px 0 10px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; letter-spacing: -.02em; }
+  p { color: var(--muted); margin: 8px 0; }
+  code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
+  code { background: #ece9e1; border-radius: 5px; padding: 1px 5px; color: var(--ink); font-size: .92em; }
+  pre { background: #17191d; color: #f1f0e9; border-radius: 12px; padding: 14px 16px; overflow: auto; font-size: 12.5px; line-height: 1.6; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 22px 24px; box-shadow: 0 10px 30px rgba(23,24,28,.04); }
+  .step { display: flex; gap: 14px; margin: 18px 0; }
+  .num { width: 28px; height: 28px; flex: none; border-radius: 9px; background: var(--lime); color: #14180d; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .step div { flex: 1; }
+  .warn { margin-top: 28px; background: #fdf5e3; border: 1px solid #f0e2bd; color: #7a4e05; border-radius: 12px; padding: 12px 15px; font-size: 13px; }
+  footer { color: #8b8d85; font-size: 11px; margin-top: 34px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <span class="tag">WIN2MAC · MAC VALIDATION</span>
+  <h1>一键收集 Mac 端日志</h1>
+  <p>这个工具会在 Mac 上检查转换产物、尝试启动应用，并把完整日志和系统信息打包到桌面。把生成的诊断 ZIP 发回给 Windows 侧的打包者即可。</p>
+
+  <div class="card">
+    <h2>怎么用</h2>
+    <div class="step"><span class="num">1</span><div><b>解压转换产物</b><p>用 Finder 解压 Win2Mac 生成的 ZIP。不要用 Windows 资源管理器解压。</p></div></div>
+    <div class="step"><span class="num">2</span><div><b>把本工具放到 .app 旁边</b><p>如果工具文件夹和 .app 不在同一层，直接把 .app 拖到 <code>Start-Mac-Validation.command</code> 上也可以。</p></div></div>
+    <div class="step"><span class="num">3</span><div><b>双击开始验证</b><p>首次打开若被 Gatekeeper 拦截，右键 → 打开；或在终端运行 <code>bash Start-Mac-Validation.command</code>。</p></div></div>
+    <div class="step"><span class="num">4</span><div><b>把桌面诊断包发回</b><p>验证结束后 Finder 会弹出诊断 ZIP。日志全文也在桌面。</p></div></div>
+  </div>
+
+  <h2>日志和诊断包在哪</h2>
+  <pre>~/Desktop/Win2Mac-验证日志-日期-时间.log
+~/Desktop/Win2Mac-诊断-日期-时间.zip</pre>
+  <p>诊断 ZIP 包含：完整验证日志、macOS/机型/显卡信息、应用的 Info.plist 与配置、该应用的 Wine 启动日志。它不包含应用文件本体。</p>
+
+  <h2>如果启动时间很长</h2>
+  <p>首次启动可能下载 Wine 引擎（约 184 MB）或安装运行库，30 秒内未必完成。工具会先收集当前日志；等应用窗口出现后，再双击一次工具，就能把后续完整日志带上。</p>
+
+  <div class="warn">
+    <b>隐私提示：</b>日志可能包含 Mac 用户名、安装路径、应用输出内容。只发送给可信的打包者，不要公开上传。Windows 应用与商标归各自权利人所有；本工具不授予分发权。
+  </div>
+
+  <footer>Win2Mac Studio Mac Validation · 日志工具版本见 VERSION.txt</footer>
+</main>
+</body>
+</html>

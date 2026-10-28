@@ -1,0 +1,14 @@
+{
+  "kind": "wine",
+  "source": "github",
+  "repo": "Gcenx/macOS_Wine_builds",
+  "release": "11.18",
+  "name": "wine-staging-11.18-osx64.tar.xz",
+  "version": "11.18",
+  "url": "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz",
+  "size": 193105336,
+  "sizeLabel": "184 MB",
+  "sha256": "b63704b91af269bc026a87f12bd297c4a50caaf570c322e600b6621ef918f127",
+  "arch": "x86_64",
+  "fetchedAt": "2026-10-28T12:57:32.011Z"
+}

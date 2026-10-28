@@ -1,0 +1,75 @@
+{
+  "name": "win2mac-studio",
+  "productName": "Win2Mac Studio",
+  "version": "0.4.0",
+  "description": "Package Windows applications into self-contained macOS .app bundles powered by Wine.",
+  "main": "electron/main.js",
+  "author": "Win2Mac Studio contributors",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev:ui": "node tools/dev-server.js",
+    "cli": "node cli.js",
+    "test": "node --test test/*.test.js",
+    "test:macos": "node --test test/macos-launcher.test.js",
+    "test:e2e": "node test/e2e-pack.js",
+    "mac-check": "node tools/make-mac-check.js",
+    "brand": "node tools/make-icons.js",
+    "dist": "electron-builder --win",
+    "dist:dir": "electron-builder --win --dir"
+  },
+  "dependencies": {
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.win2mac.studio",
+    "productName": "Win2Mac Studio",
+    "copyright": "Copyright © 2026 Win2Mac Studio contributors",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "app/**/*",
+      "engine/**/*",
+      "resources/**/*",
+      "cli.js",
+      "package.json",
+      "LICENSE",
+      "NOTICE.md",
+      "node_modules/yazl/**/*",
+      "node_modules/yauzl/**/*",
+      "node_modules/pend/**/*",
+      "node_modules/buffer-crc32/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Win2Mac-Studio-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Win2Mac Studio"
+    }
+  }
+}

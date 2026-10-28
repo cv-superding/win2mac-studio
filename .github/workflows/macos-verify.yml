@@ -1,0 +1,43 @@
+name: macOS launcher verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: macOS ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Validate shell scripts with macOS bash
+        run: |
+          for script in resources/templates/*.sh resources/templates/*.command; do
+            echo "bash -n $script"
+            bash -n "$script"
+          done
+
+      - name: Unit tests and real-Darwin launcher simulation
+        run: npm test
+
+      - name: Show launcher log on failure
+        if: failure()
+        run: |
+          find "${TMPDIR:-/tmp}" -path '*win2mac-macos-*' -name '*.log' -print -exec tail -n 120 {} \; || true
