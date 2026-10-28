@@ -162,7 +162,7 @@ test('Windows service dependencies downgrade to C instead of blocking', async ()
   const path = require('node:path');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'win2mac-svc-'));
   const exe = path.join(dir, 'notepad.exe');
-  fs.copyFileSync(path.join(process.env.SystemRoot, 'System32', 'notepad.exe'), exe);
+  fs.writeFileSync(exe, makePE());
   const app = {
     name: 'Service Test', publisher: 'Test', version: '1.0', installPath: dir, exePath: exe,
     workingDirectory: dir, registryKeys: [], source: 'test', launchArgs: '',
