@@ -269,7 +269,7 @@ extract_engine_archive() {
     local actual
     actual=$(file_sha256 "$archive")
     if [ -n "$actual" ] && [ "$actual" != "$WIN2MAC_ENGINE_SHA256" ]; then
-      echo "引擎 SHA-256 不匹配，拒绝解压。期望 $WIN2MAC_ENGINE_SHA256，实际 $actual" >&2
+      echo "引擎 SHA-256 不匹配，拒绝解压。期望 ${WIN2MAC_ENGINE_SHA256}，实际 $actual" >&2
       return 1
     fi
   fi
@@ -382,7 +382,7 @@ download_and_extract_engine() {
     local actual
     actual=$(file_sha256 "$archive")
     if [ -n "$actual" ] && [ "$actual" != "$WIN2MAC_ENGINE_SHA256" ]; then
-      echo "下载的引擎 SHA-256 不匹配（期望 $WIN2MAC_ENGINE_SHA256，实际 $actual）" >&2
+      echo "下载的引擎 SHA-256 不匹配（期望 ${WIN2MAC_ENGINE_SHA256}，实际 ${actual}）" >&2
       rm -f "$archive" "$archive.part"
       return 1
     fi
@@ -545,7 +545,7 @@ run_installer() {
   fi
   [ -n "$WINESERVER" ] && "$WINESERVER" -w
   if [ "$install_status" -ne 0 ]; then
-    fail "安装程序退出（代码 $install_status）。可重新打开应用重试安装；如果安装程序已经完成但仍报错，请重置运行环境。日志：$LOG"
+    fail "安装程序退出（代码 ${install_status}）。可重新打开应用重试安装；如果安装程序已经完成但仍报错，请重置运行环境。日志：$LOG"
   fi
   mkdir -p "$PREFIX/.win2mac"
   printf '%s' "$WIN2MAC_PAYLOAD_VERSION" > "$PREFIX/.win2mac/installer-ran"
@@ -713,7 +713,7 @@ verify_payload_integrity
 if [ "$WIN2MAC_INSTALLER_MODE" = "1" ]; then
   INSTALLER_UNIX="$(payload_path_to_prefix "$WIN2MAC_INSTALLER_PAYLOAD")"
   if [ ! -f "$INSTALLER_UNIX" ]; then
-    fail "安装包未找到：$WIN2MAC_INSTALLER_PAYLOAD。日志：$LOG"
+    fail "安装包未找到：${WIN2MAC_INSTALLER_PAYLOAD}。日志：$LOG"
   fi
   INSTALLER_MARKER="$PREFIX/.win2mac/installer-ran"
   installed_installer_version=""
@@ -740,7 +740,7 @@ if [ "$WIN2MAC_INSTALLER_MODE" = "1" ]; then
 else
   EXE_UNIX="$(payload_path_to_prefix "$WIN2MAC_EXE_PAYLOAD")"
   if [ ! -f "$EXE_UNIX" ]; then
-    fail "未找到主程序：$WIN2MAC_EXE_PAYLOAD。应用可能不完整，或安装路径包含不受支持的符号。日志：$LOG"
+    fail "未找到主程序：${WIN2MAC_EXE_PAYLOAD}。应用可能不完整，或安装路径包含不受支持的符号。日志：$LOG"
   fi
   WORKDIR_UNIX="$(payload_path_to_prefix "$WIN2MAC_WORKDIR_PAYLOAD")"
   if [ ! -d "$WORKDIR_UNIX" ]; then
@@ -756,7 +756,7 @@ while [ "$arg_index" -le "$WIN2MAC_ARG_COUNT" ]; do
   arg_index=$((arg_index + 1))
 done
 
-notify "启动 $WIN2MAC_APP_NAME…"
+notify "启动 ${WIN2MAC_APP_NAME}…"
 echo "Launching: $EXE_UNIX ${ARGS[*]:-}"
 cd "$WORKDIR_UNIX" || fail "无法进入工作目录：$WORKDIR_UNIX"
 if [ "${WIN2MAC_PREVENT_SLEEP:-0}" = "1" ] && command -v caffeinate >/dev/null 2>&1; then
@@ -767,6 +767,6 @@ fi
 status=$?
 echo "Exited with status $status"
 if [ "$status" -ne 0 ]; then
-  show_error "应用已退出（代码 $status）。如果应用没有启动，请把日志反馈给打包者。"
+  show_error "应用已退出（代码 ${status}）。如果应用没有启动，请把日志反馈给打包者。"
 fi
 exit "$status"

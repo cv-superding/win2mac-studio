@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.1 — 2026-10-28
+
+### Fixed
+
+- **ZIP/文件夹主程序误识别**：`Uninstall 客源雷达.exe` 这类“卸载器 + 应用名”文件不再参与主程序排序；`uninstall`/`unins*`/`卸载`/安装器/更新器等名称统一硬排除。真实“ZIP 内容直接在根目录”的包也已加入回归测试。
+- **macOS 启动器变量解析**：`${WIN2MAC_APP_NAME}` 等变量在中文标点前统一加花括号，修复 macOS bash 报 `WIN2MAC_APP_NAME…: unbound variable` 导致首次启动直接退出的问题。新增模板变量回归断言。
+- 0.4.1 重新打包安装包、便携版与 MacCheck 工具包；源码与 GitHub Actions 同步更新。
+
+### Tests
+
+- 单元测试 21/21：新增 Uninstall 主程序排除、扁平 ZIP 根目录、变量/中文标点回归；E2E 与打包后 ZIP 导入 smoke 继续通过。
+
 ## 0.4.0 — 2026-10-28
 
 ### Added

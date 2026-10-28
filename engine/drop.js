@@ -19,8 +19,15 @@ const SKIP_DIRS = new Set([
   'tmp',
   'logs',
 ]);
-const HARD_EXCLUDE = /(unins[0-9a-z]*|uninstall|setup|installer|install|update|updater|crash|reporter|vc_?redist|vcredist|dotnet|dxsetup|directx|elevate|notification)\.exe$/i;
+const HARD_EXCLUDE = /(^|[\s._-])(unins[0-9a-z]*|uninstall(?:er)?|setup|installer|install|update|updater|crash|reporter|vc_?redist|vcredist|dotnet|dxsetup|directx|elevate|notification)([\s._-]|$)/i;
 const SOFT_PENALTY = /(helper|service|servicectl|register|config|settings|unpack|extract|diagnostic|report|benchmark)\.exe$/i;
+
+function isUnwantedExe(filePath) {
+  const base = path.win32.basename(filePath);
+  return /uninstall|unins/i.test(base)
+    || /卸载|安装程序/.test(base)
+    || HARD_EXCLUDE.test(base);
+}
 
 function candidateScore(entry, folderName) {
   const base = path.win32.basename(entry.path, path.win32.extname(entry.path));
@@ -34,7 +41,7 @@ function candidateScore(entry, folderName) {
 
 function rankCandidates(candidates, folderName) {
   return candidates
-    .filter((entry) => !HARD_EXCLUDE.test(entry.path))
+    .filter((entry) => !isUnwantedExe(entry.path))
     .map((entry) => ({ ...entry, score: candidateScore(entry, folderName) }))
     .sort((a, b) => b.score - a.score || b.size - a.size);
 }
@@ -121,6 +128,7 @@ module.exports = {
   MAX_ENTRIES,
   MAX_DEPTH,
   rankCandidates,
+  isUnwantedExe,
   collectExeCandidates,
   resolveDroppedFolder,
   looksLikeInstallerName,

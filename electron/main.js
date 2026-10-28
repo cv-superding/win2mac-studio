@@ -26,6 +26,9 @@ const PKG = require('../package.json');
 const isDev = process.argv.includes('--dev');
 const isSmokeScan = process.argv.includes('--smoke-scan');
 const isSmoke = process.argv.includes('--smoke-test') || isSmokeScan;
+if (isSmoke) {
+  app.setPath('userData', path.join(app.getPath('temp'), 'win2mac-smoke-userdata'));
+}
 let mainWindow = null;
 let scanCache = null;
 let iconJob = null;
@@ -133,15 +136,17 @@ function createWindow() {
         try {
           await ensureDir(smokeFixture);
           await fsp.writeFile(path.join(smokeFixture, 'Smoke Fixture.exe'), Buffer.alloc(5000, 7));
+          await fsp.writeFile(path.join(smokeFixture, 'Uninstall Smoke Fixture.exe'), Buffer.alloc(7000, 8));
           result.cacheGroups = await mainWindow.webContents.executeJavaScript('window.win2mac.cacheStats().then((stats) => stats.groups.length)');
           const dropped = await mainWindow.webContents.executeJavaScript(`window.win2mac.inspectPath(${JSON.stringify(smokeFixture)}).then((payload) => ({ name: payload?.app?.name || '', kind: payload?.kind || '', exe: payload?.app?.exePath || '' }))`);
           result.drop = dropped;
           const smokeZip = path.join(appDataDir(), 'smoke-fixture.zip');
           const archive = new yazl.ZipFile();
-          archive.addFile(path.join(smokeFixture, 'Smoke Fixture.exe'), 'SmokeFixture/Smoke Fixture.exe');
+          archive.addFile(path.join(smokeFixture, 'Smoke Fixture.exe'), 'Smoke Fixture.exe');
+          archive.addFile(path.join(smokeFixture, 'Uninstall Smoke Fixture.exe'), 'Uninstall Smoke Fixture.exe');
           archive.end();
           await pipeline(archive.outputStream, fs.createWriteStream(smokeZip));
-          const archived = await mainWindow.webContents.executeJavaScript(`window.win2mac.inspectPath(${JSON.stringify(smokeZip)}).then((payload) => ({ name: payload?.app?.name || '', kind: payload?.kind || '', source: payload?.app?.source || '', files: payload?.archive?.files || 0, extractedPath: payload?.archive?.extractedPath || '' }))`);
+          const archived = await mainWindow.webContents.executeJavaScript(`window.win2mac.inspectPath(${JSON.stringify(smokeZip)}).then((payload) => ({ name: payload?.app?.name || '', kind: payload?.kind || '', source: payload?.app?.source || '', files: payload?.archive?.files || 0, exe: payload?.app?.exePath || '', extractedPath: payload?.archive?.extractedPath || '' }))`);
           result.archive = archived;
           await fsp.rm(smokeZip, { force: true }).catch(() => {});
           if (archived.extractedPath) await fsp.rm(path.dirname(archived.extractedPath), { recursive: true, force: true }).catch(() => {});
@@ -189,6 +194,8 @@ function createWindow() {
           && result.cacheGroups >= 3
           && result.drop?.name
           && result.archive?.source === 'archive'
+          && /Smoke Fixture\.exe$/.test(result.archive?.exe || '')
+          && !/Uninstall/i.test(result.archive?.exe || '')
           && (!isSmokeScan || result.appCount > 0);
         app.exit(ok ? 0 : 1);
       } catch (error) {

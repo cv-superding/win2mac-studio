@@ -1,4 +1,4 @@
-# Win2Mac Studio 0.4.0
+# Win2Mac Studio 0.4.1
 
 构建日期：2026-10-28 · Windows x64 · Electron 44.9.0
 
@@ -6,18 +6,25 @@
 
 | 文件 | 说明 |
 |---|---|
-| `release/Win2Mac-Studio-Setup-0.4.0.exe` | NSIS 安装程序（未签名） |
-| `release/win-unpacked-0.4.0/Win2Mac Studio.exe` | 免安装运行版（用于冒烟测试） |
-| `release/Win2Mac-MacCheck-0.4.0.zip` | 可独立发送的 Mac 验证工具包 |
+| `release/Win2Mac-Studio-Setup-0.4.1.exe` | NSIS 安装程序（未签名） |
+| `release/win-unpacked-0.4.1/Win2Mac Studio.exe` | 免安装运行版（用于冒烟测试） |
+| `release/Win2Mac-MacCheck-0.4.1.zip` | 可独立发送的 Mac 验证工具包 |
 | `release/SHA256SUMS.txt` | 以上三者 SHA-256 |
 
-- 安装包大小：120,839,185 bytes（约 115.2 MiB）
-- 安装包 SHA-256：`7577d2e469d2866550a11a2f1cad563efedcbd60164f43b3aebc89fa2eb1a210`
-- 便携版 EXE SHA-256：`b5b6c444593769f48e2416257107abe5ab18613c7b743b74b4822427d0249a51`
-- MacCheck ZIP SHA-256：`5cf783e8e78826a99203ef7a6e138ec55e21ca1c3e4f36c786b1c55b22dc2fe8`
-- 打包后 smoke：`bridge=true, nav=4, version=0.4.0, electron=44.9.0, cacheGroups=3, drop=app, archive=app`
+- 安装包大小：120,839,556 bytes（约 115.2 MiB）
+- 安装包 SHA-256：`0825402cd39a1e867f4784ada31e3d8cc839687b9fec5535df1e73f743460947`
+- 便携版 EXE SHA-256：`e3ad8291b40ba11c62fdef426fc82dc3f92db09c471f3eef16a9f259ca258ce1`
+- MacCheck ZIP SHA-256：`1f44724785b42faf0302f04951f7f265fc8689530eca59ab942634c0e6dab4ce`
+- 打包后 smoke：`bridge=true, nav=4, version=0.4.1, electron=44.9.0, cacheGroups=3, drop=app, archive=Smoke Fixture.exe`
 - 真实 IPC UI 扫描 smoke（打包后的 exe）：`172 apps / 172 icons / 0 pending / 0 scanError`
-- `release/win-unpacked/`（0.2.0）、`win-unpacked-0.3.0/`、`0.3.1/`、`0.3.2/` 为历史便携版；0.4.0 请使用 `win-unpacked-0.4.0/`。
+- `release/win-unpacked/`（0.2.0）与 `win-unpacked-0.3.x/`、`0.4.0/` 为历史便携版；0.4.1 请使用 `win-unpacked-0.4.1/`。
+
+## 0.4.1 修复
+
+- **ZIP/文件夹主程序识别**：`Uninstall 客源雷达.exe` 这类“卸载器 + 应用名”不再被选为主程序；`unins*`/`uninstall`/`卸载`/`setup`/`installer`/`update` 等名称统一硬排除，按名称相似度、体积、目录深度重新打分。已用真实“根目录即应用文件”的 ZIP 复现并回归。
+- **macOS 启动器中文变量崩溃**：`$VAR` 紧跟中文标点会被 macOS bash 3.2 当作变量名（`WIN2MAC_APP_NAME…: unbound variable`），启动即退出。launcher/mac-check 模板全部改为 `${VAR}` 形式并新增模板断言。
+- 打包 smoke 现在会构造“主程序 + 卸载器”同目录的扁平 ZIP，验证选择的是 `Smoke Fixture.exe` 而非 `Uninstall Smoke Fixture.exe`。
+- smoke 模式使用独立 userData，正在运行的正式版窗口不再阻塞冒烟测试。
 
 ## 0.4.0 新增：导入 ZIP
 
@@ -54,19 +61,19 @@
 
 诊断 ZIP 包含完整报告、系统/机型/CPU/显卡信息（过滤序列号等）、Info.plist、config.env、bundle.json、manifest、该应用 Wine 日志与失败时的 Integrity.log；不含应用 payload。
 
-独立工具包：`release/Win2Mac-MacCheck-0.4.0.zip`。
+独立工具包：`release/Win2Mac-MacCheck-0.4.1.zip`。
 
 ## 验证结果
 
-- 单元测试 20/20：新增 ZIP 解压、中文路径、顶层应用目录识别、恶意路径拒绝；原有配方/拖拽/缓存/Darwin 启动器/Mac 验证收集器/LF 行尾测试继续通过。
+- 单元测试 21/21：新增卸载器主程序排除、扁平 ZIP 根目录、`${VAR}`+中文标点模板断言；ZIP 解压、恶意路径、配方/拖拽/缓存/Darwin 启动器/Mac 验证收集器/LF 行尾测试继续通过。
 - E2E 通过：notepad 打包、ZIP UTF-8/0755、注册表、内置引擎、运行时下载/SHA/缓存、VC++、安装器、CLI 配方构建。
-- 打包后 smoke 增加真实 ZIP 导入（解压 → 识别 → `source=archive`）；便携版 smoke 也通过。
-- 真实 IPC 扫描：172 应用、172 图标、0 待分析。
-- 用实际 `客源雷达` 目录生成 109 文件 / 453 MB ZIP，解压后 109 文件完整、主程序与 `resources/app.asar` 存在。
+- 打包后 smoke（0.4.1 便携版）：`archive.exe=Smoke Fixture.exe`、不含 `Uninstall`，`bridge=true / nav=4 / cacheGroups=3`。
+- 真实 IPC 扫描：172 应用、172 图标、0 待分析、0 scanError。
+- 用实际 `客源雷达` ZIP（109 文件，根目录含 210 MB 主程序与 517 KB 卸载器）复现：修复后主程序识别为 `客源雷达.exe`。
 
 ## 安装与运行
 
-1. 运行 `Win2Mac-Studio-Setup-0.4.0.exe`。安装包未签名，SmartScreen 可能要求“更多信息 → 仍要运行”。
+1. 运行 `Win2Mac-Studio-Setup-0.4.1.exe`。安装包未签名，SmartScreen 可能要求“更多信息 → 仍要运行”。
 2. 转换后把 ZIP 原样拷到 Mac，用 Finder 解压，双击 `Open-Win2Mac-App.command`。
 3. 若朋友侧报错，让他双击 `Start-Mac-Validation.command`，把桌面诊断 ZIP 发回。
 
@@ -90,4 +97,4 @@ npm run dist
 npm run mac-check
 ```
 
-Electron/electron-builder 下载可能需要代理：`HTTPS_PROXY=http://127.0.0.1:7897`。
+Electron/electron-builder 下载可能需要代理：`HTTPS_PROXY=http://127.0.0.1:7897`。若 `release\win-unpacked` 被 Windows 文件锁卡住（EPERM/EBUSY），可输出到工作区外目录：`npx electron-builder --win --config.directories.output=../win2mac-dist`。

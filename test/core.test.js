@@ -317,24 +317,44 @@ test('zip import rejects unsafe paths and finds the app root', async () => {
   const yazl = require('yazl');
   const { pipeline } = require('node:stream/promises');
   const { extractZip, findAppRoot, safeEntryPath } = require('../engine/archive');
+  const { resolveDroppedFolder } = require('../engine/drop');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'win2mac-zip-'));
   try {
     const source = path.join(root, '客源雷达');
     fs.mkdirSync(path.join(source, 'resources'), { recursive: true });
     fs.writeFileSync(path.join(source, '客源雷达.exe'), Buffer.alloc(6000));
+    fs.writeFileSync(path.join(source, 'Uninstall 客源雷达.exe'), Buffer.alloc(5000));
     fs.writeFileSync(path.join(source, 'resources', 'app.asar'), Buffer.from('fake asar'));
     const zipPath = path.join(root, 'app.zip');
     const zip = new yazl.ZipFile();
     zip.addFile(path.join(source, '客源雷达.exe'), '客源雷达/客源雷达.exe');
+    zip.addFile(path.join(source, 'Uninstall 客源雷达.exe'), '客源雷达/Uninstall 客源雷达.exe');
     zip.addFile(path.join(source, 'resources', 'app.asar'), '客源雷达/resources/app.asar');
     zip.end();
     await pipeline(zip.outputStream, fs.createWriteStream(zipPath));
 
     const extracted = path.join(root, 'extracted');
     const result = await extractZip(zipPath, extracted);
-    assert.equal(result.files, 2);
+    assert.equal(result.files, 3);
     assert.ok(fs.existsSync(path.join(extracted, '客源雷达', '客源雷达.exe')));
     assert.equal(await findAppRoot(extracted), path.join(extracted, '客源雷达'));
+    assert.equal((await resolveDroppedFolder(path.join(extracted, '客源雷达'))).exePath, path.join(extracted, '客源雷达', '客源雷达.exe'));
+
+    // Mirror a Windows "compress contents" ZIP: files at archive root and a random extraction folder name.
+    const flatRoot = path.join(root, 'flat');
+    fs.mkdirSync(flatRoot, { recursive: true });
+    fs.writeFileSync(path.join(flatRoot, '客源雷达.exe'), Buffer.alloc(6000));
+    fs.writeFileSync(path.join(flatRoot, 'Uninstall 客源雷达.exe'), Buffer.alloc(7000));
+    const flatZip = new yazl.ZipFile();
+    flatZip.addFile(path.join(flatRoot, '客源雷达.exe'), '客源雷达.exe');
+    flatZip.addFile(path.join(flatRoot, 'Uninstall 客源雷达.exe'), 'Uninstall 客源雷达.exe');
+    flatZip.end();
+    const flatZipPath = path.join(root, 'flat.zip');
+    await pipeline(flatZip.outputStream, fs.createWriteStream(flatZipPath));
+    const flatExtract = path.join(root, 'zip-random-name');
+    await extractZip(flatZipPath, flatExtract);
+    assert.equal(await findAppRoot(flatExtract), flatExtract);
+    assert.equal((await resolveDroppedFolder(flatExtract)).exePath, path.join(flatExtract, '客源雷达.exe'));
 
     assert.equal(safeEntryPath('客源雷达/客源雷达.exe'), '客源雷达/客源雷达.exe');
     assert.equal(safeEntryPath('../evil.txt'), null);
@@ -342,5 +362,14 @@ test('zip import rejects unsafe paths and finds the app root', async () => {
     assert.equal(safeEntryPath('/absolute/evil.txt'), null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('macOS shell templates brace variables before Unicode text', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  for (const name of ['launcher.sh', 'mac-check.command', 'open-me.command', 'verify-integrity.command', 'reset-runtime.command']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'resources', 'templates', name), 'utf8');
+    assert.equal(/\$[A-Za-z_][A-Za-z0-9_]*(?=[^ -])/.test(source), false, `${name} has an unbraced variable before Unicode text`);
   }
 });

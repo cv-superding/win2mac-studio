@@ -191,7 +191,7 @@ if [ "$HOST_ARCH" = "arm64" ]; then
     record FAIL "Rosetta 2 未就绪" "请运行：softwareupdate --install-rosetta --agree-to-license"
   fi
 else
-  record PASS "Rosetta 检查" "当前为 $HOST_ARCH，无需 Rosetta"
+  record PASS "Rosetta 检查" "当前为 ${HOST_ARCH}，无需 Rosetta"
 fi
 
 if [ -n "$APP" ] && [ ! -d "$APP" ]; then
