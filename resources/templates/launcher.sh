@@ -119,7 +119,11 @@ fi
 if [ "$LOG" != "$EARLY_LOG" ]; then
   cat "$EARLY_LOG" >> "$LOG" 2>/dev/null || true
 fi
-exec >>"$LOG" 2>&1
+if [ "${WIN2MAC_STREAM_LOG:-0}" = "1" ]; then
+  exec > >(tee -a "$LOG") 2>&1
+else
+  exec >>"$LOG" 2>&1
+fi
 case "${WIN2MAC_DEBUG:-0}" in
   1|true|yes) WIN2MAC_WINEDEBUG="fixme-all" ;;
 esac
@@ -144,7 +148,7 @@ while [ "$electron_arg_index" -le "${WIN2MAC_ELECTRON_ARG_COUNT:-0}" ] 2>/dev/nu
   electron_arg_index=$((electron_arg_index + 1))
 done
 log_line "hostAdbArm=${WIN2MAC_HOST_ADB_ARM:-none} hostAdbX86=${WIN2MAC_HOST_ADB_X86:-none}"
-log_line "winDebug=$WIN2MAC_WINEDEBUG debugMode=$WIN2MAC_DEBUG noGui=${WIN2MAC_NO_GUI:-0}"
+log_line "winDebug=$WIN2MAC_WINEDEBUG debugMode=$WIN2MAC_DEBUG noGui=${WIN2MAC_NO_GUI:-0} streamLog=${WIN2MAC_STREAM_LOG:-0}"
 if command -v df >/dev/null 2>&1; then
   log_line "disk: $(df -h "$HOME" 2>/dev/null | tail -n 1 || echo unknown)"
 fi

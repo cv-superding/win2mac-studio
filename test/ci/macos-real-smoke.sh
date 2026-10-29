@@ -40,8 +40,13 @@ if [ -z "$CMD_EXE" ] || [ ! -f "$CMD_EXE" ]; then
   echo "Wine cmd.exe not found under $WINE_ROOT"
   exit 1
 fi
-echo "wine64: $WINE_BIN"
+echo "wine: $WINE_BIN"
 echo "cmd.exe: $CMD_EXE"
+echo "host: $(uname -a)"
+echo "macOS: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
+ls -l "$WINE_BIN" 2>&1 || true
+file "$WINE_BIN" 2>&1 || true
+echo "Wine version: $(WINEDEBUG=-all "$WINE_BIN" --version 2>&1 || true)"
 
 cp "$ROOT/resources/templates/launcher.sh" "$APP/Contents/MacOS/launcher"
 chmod +x "$APP/Contents/MacOS/launcher"
@@ -77,7 +82,7 @@ WIN2MAC_REGISTRY_COUNT='0'
 WIN2MAC_RUNTIME_COUNT='0'
 WIN2MAC_RUNTIME_VERSION='none'
 WIN2MAC_USERDATA_COUNT='0'
-WIN2MAC_DLL_OVERRIDES='mshtml='
+WIN2MAC_DLL_OVERRIDES='mscoree,mshtml='
 WIN2MAC_WINEDEBUG='-all'
 WIN2MAC_ENV_COUNT='0'
 WIN2MAC_VERIFY_ON_LAUNCH='1'
@@ -119,10 +124,26 @@ export WIN2MAC_LOG_DIR="$WORK/logs"
 export WIN2MAC_CACHE_ROOT="$WORK/cache"
 export WIN2MAC_DIAGNOSTICS_DIR="$WORK/diag"
 export WIN2MAC_NO_GUI=1
+export WIN2MAC_STREAM_LOG=1
 export WIN2MAC_PREVENT_SLEEP=0
 
 launcher_run() {
-  "$APP/Contents/MacOS/launcher" --debug > "$WORK/run-$1.out" 2>&1
+  label="$1"
+  "$APP/Contents/MacOS/launcher" --debug &
+  pid=$!
+  (
+    sleep 420
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "smoke timeout: launcher still running after 420s ($label)"
+      kill "$pid" 2>/dev/null || true
+    fi
+  ) &
+  watchdog=$!
+  wait "$pid"
+  rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  return $rc
 }
 
 echo "===== first launch ====="
