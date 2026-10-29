@@ -30,7 +30,7 @@ Win2Mac Studio：在 **Windows 10/11** 上把已安装的 Windows 应用打包�
 | `npm run brand` | 重新生成 `build/icon.*` |
 | `node cli.js scan\|analyze\|build\|engines ...` | 无界面流程，参数见 `cli.js` 顶部 usage |
 
-验证阈值：提交前 `npm test` 必须全绿（当前 40 项）；改动打包路径时额外跑 `npm run test:e2e`。
+验证阈值：提交前 `npm test` 必须全绿（当前 52 项）；改动打包路径时额外跑 `npm run test:e2e`。
 
 ## 代码地图
 
@@ -45,6 +45,8 @@ Win2Mac Studio：在 **Windows 10/11** 上把已安装的 Windows 应用打包�
 | `engine/resolver.js` / `download.js` | Gcenx Wine 资产解析、下载、校验、缓存 |
 | `engine/icns.js` / `icons.js` / `plist.js` | 图标与 Info.plist 生成 |
 | `engine/recipe.js` | `.win2mac.json` 移植配方（白名单校验） |
+| `engine/ai/` | OpenAI 兼容客户端、修复 Agent 循环、`config.env` 白名单补丁 |
+| `engine/macapp.js` / `mactowin.js` | macOS `.app` 分析（plist/Mach-O/ASAR）；Electron 重组为 Windows 免安装包 |
 | `engine/archive.js` / `drop.js` | ZIP 安全解压；拖拽路径分类与主程序排序 |
 | `engine/cache.js` / `util.js` | 缓存清理；通用路径/哈希/文件工具 |
 | `resources/scripts/` | PowerShell：扫描、图标提取、签名校验 |
@@ -87,6 +89,8 @@ Win2Mac Studio：在 **Windows 10/11** 上把已安装的 Windows 应用打包�
 - **诊断报告**：`Report.json` 的 `schema` 固定为 `win2mac-diagnostics/1`；`Missing.txt` 的 `MISSING`/`SIZE_MISMATCH` 行格式是修复入口。诊断包不得复制 payload，只能带清单、日志和元数据。
 - **文件清单**：`payload-index.tsv/json` 必须与 `manifest.sha256` 同源同批生成；启动器用 TSV 做存在性/大小快检，完整 SHA-256 仍以 manifest 为准。
 - **许可证**：不复制/分发 Apple GPTK、CrossOver、Whisky 二进制；只允许内置可再分发的 Gcenx Wine（LGPL）。不得实现反作弊/DRM 绕过、隐蔽运行或进程注入。
+- **AI 修复**：Agent 只能调用白名单工具（读诊断/日志、改 `config.env` 白名单键、重建）；禁止任意命令执行、任意路径读取与签名/隔离绕过。API Key 只存本机 `settings.json`，IPC 不得回传明文。
+- **Mac → Windows**：只重组 Electron 载荷；下载 Electron 运行时必须校验 `SHASUMS256.txt`；含 Mach-O `.node` 或非 Electron 应用必须明确拒绝，不得静默产出不可用包。
 
 ## 测试约定
 

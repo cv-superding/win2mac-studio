@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('win2mac', {
   pickAppExe: (app, services) => ipcRenderer.invoke('dialog:app-exe', { app, services }),
   pickInstaller: () => ipcRenderer.invoke('dialog:installer'),
   pickArchive: () => ipcRenderer.invoke('dialog:archive'),
+  pickMacApp: () => ipcRenderer.invoke('mactowin:pick-app'),
+  pickElectronZip: () => ipcRenderer.invoke('mactowin:pick-electron-zip'),
+  buildWindowsApp: (payload) => ipcRenderer.invoke('mactowin:build', payload),
+  aiTest: () => ipcRenderer.invoke('ai:test'),
+  aiPickDiagnostics: () => ipcRenderer.invoke('ai:pick-diagnostics'),
+  aiImportDiagnostics: (target) => ipcRenderer.invoke('ai:import-diagnostics', target),
+  aiFix: (payload) => ipcRenderer.invoke('ai:fix', payload),
   inspectPath: (target) => ipcRenderer.invoke('apps:inspect-path', target),
   pathForFile: (file) => {
     try {
@@ -47,6 +54,8 @@ contextBridge.exposeInMainWorld('win2mac', {
   onScanProgress: (callback) => subscribe('scan:progress', callback),
   onArchiveProgress: (callback) => subscribe('archive:progress', callback),
   onBuildProgress: (callback) => subscribe('build:progress', callback),
+  onWindowsProgress: (callback) => subscribe('mactowin:progress', callback),
+  onAiEvent: (callback) => subscribe('ai:event', callback),
   onBuildComplete: (callback) => subscribe('build:complete', callback),
   onBuildError: (callback) => subscribe('build:error', callback),
   onIcons: (callback) => subscribe('apps:icons', callback),

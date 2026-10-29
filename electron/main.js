@@ -20,7 +20,14 @@ const { buildRecipe, normalizeRecipe, MAX_RECIPE_BYTES } = require('../engine/re
 const { resolveDroppedFolder, classifyDroppedPath } = require('../engine/drop');
 const { extractZip, findAppRoot } = require('../engine/archive');
 const { collectCacheStats, clearCaches } = require('../engine/cache');
-const { readJson, writeJson, ensureDir, isPathInside, sanitizeFilename, nameSimilarity, formatBytes } = require('../engine/util');
+const { readJson, writeJson, ensureDir, isPathInside, sanitizeFilename, nameSimilarity, formatBytes, sha256File } = require('../engine/util');
+const { analyzeMacApp } = require('../engine/macapp');
+const { resolveElectronRuntime, assembleWindowsApp } = require('../engine/mactowin');
+const { testConnection } = require('../engine/ai/client');
+const { runAgent } = require('../engine/ai/agent');
+const { createFixerTools, buildFixerPrompt } = require('../engine/ai/fixer');
+const { patchConfigText } = require('../engine/ai/config');
+const { DEFAULT_AI, normalizeAiSettings, publicAiSettings } = require('../engine/ai/settings');
 const PKG = require('../package.json');
 
 const isDev = process.argv.includes('--dev');
@@ -62,20 +69,30 @@ function defaultSettings() {
     includeRuntimes: true,
     includeUserData: false,
     includeWineMono: true,
+    ai: { ...DEFAULT_AI },
   };
 }
 
 async function readSettings() {
   try {
-    return { ...defaultSettings(), ...(await readJson(settingsFile())) };
+    const stored = await readJson(settingsFile());
+    const merged = { ...defaultSettings(), ...stored };
+    merged.ai = { ...DEFAULT_AI, ...(stored?.ai || {}) };
+    return merged;
   } catch {
     return defaultSettings();
   }
 }
 
+function publicSettings(settings) {
+  const { ai, ...rest } = settings;
+  return { ...rest, ai: publicAiSettings(ai) };
+}
+
 async function saveSettings(patch) {
   const current = await readSettings();
   const next = { ...current, ...pickSettings(patch) };
+  if (patch?.ai !== undefined) next.ai = normalizeAiSettings(patch.ai, current.ai);
   await writeJson(settingsFile(), next);
   return next;
 }
@@ -102,6 +119,178 @@ async function appendHistory(record) {
   const history = await readHistory();
   history.unshift(record);
   await writeJson(historyFile(), history.slice(0, 40));
+}
+
+function buildContextDir() {
+  return path.join(appDataDir(), 'build-contexts');
+}
+
+async function recordBuildContext(buildId, context) {
+  if (!buildId) return;
+  await ensureDir(buildContextDir());
+  await writeJson(path.join(buildContextDir(), `${buildId}.json`), context);
+}
+
+async function readBuildContext(buildId) {
+  try {
+    return await readJson(path.join(buildContextDir(), `${buildId}.json`));
+  } catch {
+    return null;
+  }
+}
+
+async function importDiagnostics(targetPath) {
+  if (!targetPath) throw new Error('缺少诊断包路径');
+  const st = await fsp.stat(targetPath).catch(() => null);
+  if (!st) throw new Error('诊断包不存在');
+  let dir = targetPath;
+  if (st.isFile()) {
+    if (!/\.zip$/i.test(targetPath)) throw new Error('只支持诊断 ZIP 或解压后的诊断文件夹');
+    const digest = (await sha256File(targetPath)).slice(0, 12);
+    dir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'Win2Mac', 'diagnostics', digest);
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    await extractZip(targetPath, dir);
+  }
+  let root = dir;
+  const reportCandidate = path.join(dir, 'Report.json');
+  if (!fs.existsSync(reportCandidate)) {
+    const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const nested = entries.find((entry) => entry.isDirectory() && fs.existsSync(path.join(dir, entry.name, 'Report.json')));
+    if (nested) root = path.join(dir, nested.name);
+  }
+  if (!fs.existsSync(path.join(root, 'Report.json'))) throw new Error('诊断包里没有 Report.json，可能不是 Win2Mac 生成的诊断包');
+  let report = null;
+  try { report = JSON.parse(await fsp.readFile(path.join(root, 'Report.json'), 'utf8')); } catch { /* keep null */ }
+  const logs = [];
+  const logsDir = path.join(root, 'Logs');
+  const logEntries = await fsp.readdir(logsDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of logEntries) {
+    if (entry.isFile()) logs.push(path.join(logsDir, entry.name));
+  }
+  return { dir: root, report, logs };
+}
+
+function diagnosticsSummaryText(diag) {
+  if (!diag) return '';
+  const report = diag.report || {};
+  const lines = [
+    `诊断包：${diag.dir}`,
+    `状态：${report.run?.status || '未知'} / 阶段：${report.run?.stage || '未知'}`,
+    `错误：${report.run?.error || '未记录'}`,
+    `缺失文件：${report.payload?.missingCount ?? '?'}，大小不符：${report.payload?.sizeMismatchCount ?? '?'}`,
+    diag.logs.length ? `日志：${diag.logs.slice(0, 8).map((file) => path.basename(file)).join('、')}` : '',
+  ];
+  return lines.filter(Boolean).join('\n');
+}
+
+function configPathFor(record) {
+  if (record.platform === 'windows') return '';
+  return path.join(record.result.appPath, 'Contents', 'Resources', 'win2mac', 'config.env');
+}
+
+async function buildFixerContext({ buildId, diagnostics, rebuild }) {
+  const record = await readBuildContext(buildId);
+  if (!record) throw new Error('找不到该构建的记录，请先完成一次转换再让 AI 修复');
+  const appRoot = record.platform === 'windows' ? record.result.folderPath : record.result.appPath;
+  const configPath = configPathFor(record);
+  const allowedRoots = [appRoot, diagnostics?.dir].filter(Boolean);
+  const resolveReadable = (input) => {
+    const raw = String(input || '').trim();
+    if (!raw) throw new Error('缺少文件路径');
+    const candidates = [];
+    if (path.isAbsolute(raw)) candidates.push(path.resolve(raw));
+    else {
+      if (configPath) candidates.push(path.join(path.dirname(configPath), raw));
+      candidates.push(path.join(appRoot, raw));
+      if (diagnostics?.dir) candidates.push(path.join(diagnostics.dir, raw));
+    }
+    for (const candidate of candidates) {
+      if (allowedRoots.some((root) => isPathInside(candidate, root)) && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    }
+    throw new Error(`路径不在允许范围或不存在：${raw}`);
+  };
+
+  const readTextCapped = async (file, maxBytes = 60000) => {
+    const limit = Math.min(Math.max(Number(maxBytes) || 60000, 512), 300000);
+    const handle = await fsp.open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(limit);
+      const read = await handle.read(buffer, 0, limit, 0);
+      const text = buffer.subarray(0, read.bytesRead).toString('utf8');
+      return read.bytesRead >= limit ? `${text}\n…（已截断，文件更大）` : text;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  };
+
+  const textCorpus = async () => {
+    const files = [];
+    if (configPath && fs.existsSync(configPath)) files.push(configPath);
+    for (const root of [diagnostics?.dir, appRoot].filter(Boolean)) {
+      for (const name of ['Report.md', 'Report.json', 'Missing.txt', 'README.txt']) {
+        const file = path.join(root, name);
+        if (fs.existsSync(file)) files.push(file);
+      }
+    }
+    for (const log of diagnostics?.logs || []) files.push(log);
+    const corpus = [];
+    for (const file of files.slice(0, 40)) {
+      try {
+        corpus.push({ path: file, text: await readTextCapped(file, 200000) });
+      } catch { /* ignore */ }
+    }
+    return corpus;
+  };
+
+  return {
+    appName: record.app?.name,
+    buildId,
+    platform: record.platform,
+    analysisSummary: record.analysis ? `${record.analysis.grade} · ${record.analysis.gradeSummary}` : '',
+    diagnosticsSummary: diagnosticsSummaryText(diagnostics),
+    status: async () => ({
+      platform: record.platform,
+      app: record.app,
+      analysis: record.analysis ? { grade: record.analysis.grade, summary: record.analysis.gradeSummary, reasons: record.analysis.reasons } : null,
+      options: record.options,
+      result: record.result,
+      config: configPath && fs.existsSync(configPath) ? await readTextCapped(configPath, 30000) : '(无 config.env)',
+      diagnostics: diagnostics?.report || null,
+    }),
+    readFile: async (input, maxBytes) => {
+      const file = resolveReadable(input);
+      return { path: file, text: await readTextCapped(file, maxBytes) };
+    },
+    searchLogs: async (query, limit = 30) => {
+      const needle = String(query || '').trim();
+      if (!needle) throw new Error('缺少搜索关键字');
+      const max = Math.min(Math.max(Number(limit) || 30, 1), 80);
+      const hits = [];
+      for (const file of await textCorpus()) {
+        const lines = file.text.split(/\r?\n/);
+        for (let i = 0; i < lines.length && hits.length < max; i += 1) {
+          if (lines[i].toLowerCase().includes(needle.toLowerCase())) {
+            hits.push(`${path.basename(file.path)}:${i + 1}: ${lines[i].slice(0, 400)}`);
+          }
+        }
+        if (hits.length >= max) break;
+      }
+      return { query: needle, hits, truncated: hits.length >= max };
+    },
+    patchConfig: async (changes) => {
+      if (!configPath || !fs.existsSync(configPath)) throw new Error('当前产物的 config.env 不存在，无法补丁；可直接 rebuild');
+      const original = await fsp.readFile(configPath, 'utf8');
+      const { text, applied } = patchConfigText(original, changes);
+      if (!Object.keys(applied).length) return { changed: false, applied };
+      const backup = `${configPath}.bak-${Date.now().toString(36)}`;
+      await fsp.writeFile(backup, original, 'utf8');
+      await fsp.writeFile(configPath, text, 'utf8');
+      return { changed: true, applied, backup };
+    },
+    rebuild,
+  };
 }
 
 function createWindow() {
@@ -138,6 +327,7 @@ function createWindow() {
           await fsp.writeFile(path.join(smokeFixture, 'Smoke Fixture.exe'), Buffer.alloc(5000, 7));
           await fsp.writeFile(path.join(smokeFixture, 'Uninstall Smoke Fixture.exe'), Buffer.alloc(7000, 8));
           result.cacheGroups = await mainWindow.webContents.executeJavaScript('window.win2mac.cacheStats().then((stats) => stats.groups.length)');
+          result.aiSettings = await mainWindow.webContents.executeJavaScript('window.win2mac.getSettings().then((s) => ({ hasKey: Boolean(s.ai && s.ai.hasKey), leaked: Boolean(s.ai && Object.prototype.hasOwnProperty.call(s.ai, "apiKey")) }))');
           const dropped = await mainWindow.webContents.executeJavaScript(`window.win2mac.inspectPath(${JSON.stringify(smokeFixture)}).then((payload) => ({ name: payload?.app?.name || '', kind: payload?.kind || '', exe: payload?.app?.exePath || '' }))`);
           result.drop = dropped;
           const smokeZip = path.join(appDataDir(), 'smoke-fixture.zip');
@@ -192,6 +382,7 @@ function createWindow() {
         const ok = bridge
           && navCount >= 4
           && result.cacheGroups >= 3
+          && result.aiSettings?.leaked === false
           && result.drop?.name
           && result.archive?.source === 'archive'
           && /Smoke Fixture\.exe$/.test(result.archive?.exe || '')
@@ -341,7 +532,27 @@ async function importArchive(archivePath) {
       },
     });
     if (!extracted.files) throw new Error('压缩包里没有文件');
+    if (isMacAppBundle(extracted.root)) {
+      send('archive:progress', { stage: 'analyze', message: '正在识别 macOS 应用…', files: extracted.files, bytes: extracted.bytes });
+      const mac = await macAppSelection(extracted.root);
+      mac.app.source = 'mac-archive';
+      mac.app.archivePath = archivePath;
+      mac.app.archiveName = archiveName;
+      mac.app.importedAt = new Date().toISOString();
+      mac.archive = { path: archivePath, name: archiveName, extractedPath: extracted.root, files: extracted.files, bytes: extracted.bytes };
+      return mac;
+    }
     send('archive:progress', { stage: 'analyze', message: '正在识别应用主程序…', files: extracted.files, bytes: extracted.bytes });
+    const macNested = await findMacAppIn(extracted.root);
+    if (macNested) {
+      const mac = await macAppSelection(macNested);
+      mac.app.source = 'mac-archive';
+      mac.app.archivePath = archivePath;
+      mac.app.archiveName = archiveName;
+      mac.app.importedAt = new Date().toISOString();
+      mac.archive = { path: archivePath, name: archiveName, extractedPath: macNested, files: extracted.files, bytes: extracted.bytes };
+      return mac;
+    }
     const appRoot = await findAppRoot(extracted.root);
     let resolved;
     try {
@@ -373,12 +584,60 @@ async function importArchive(archivePath) {
   }
 }
 
+function isMacAppBundle(target) {
+  try {
+    return fs.statSync(target).isDirectory() && fs.existsSync(path.join(target, 'Contents', 'Info.plist'));
+  } catch {
+    return false;
+  }
+}
+
+async function findMacAppIn(dir) {
+  const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const apps = entries.filter((entry) => entry.isDirectory() && /\.app$/i.test(entry.name));
+  if (apps.length === 1) return path.join(dir, apps[0].name);
+  if (apps.length > 1) throw new Error(`压缩包里有 ${apps.length} 个 .app，请只保留要转换的那一个`);
+  const dirs = entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('__MACOSX'));
+  if (dirs.length === 1) {
+    const nested = path.join(dir, dirs[0].name);
+    const nestedApps = await fsp.readdir(nested, { withFileTypes: true }).catch(() => []);
+    const found = nestedApps.filter((entry) => entry.isDirectory() && /\.app$/i.test(entry.name));
+    if (found.length === 1) return path.join(nested, found[0].name);
+    if (found.length > 1) throw new Error(`压缩包里有 ${found.length} 个 .app，请只保留要转换的那一个`);
+  }
+  return '';
+}
+
+async function macAppSelection(bundlePath) {
+  const mac = await analyzeMacApp(bundlePath);
+  return {
+    kind: 'mac-app',
+    app: {
+      name: mac.name,
+      publisher: mac.bundleId,
+      version: mac.version,
+      installPath: mac.path,
+      exePath: mac.exePath,
+      workingDirectory: mac.path,
+      displayIcon: '',
+      launchArgs: '',
+      registryKeys: [],
+      source: 'mac-app',
+      platform: 'mac',
+      macAnalysis: mac,
+    },
+  };
+}
+
 async function inspectDroppedPath(target) {
   assertString(target, '拖入路径');
   const abs = path.resolve(target);
   const stat = await fsp.stat(abs).catch(() => null);
   if (!stat) throw new Error('拖入的文件或文件夹不存在');
   if (stat.isDirectory()) {
+    if (isMacAppBundle(abs)) return macAppSelection(abs);
+    const nestedMac = await findMacAppIn(abs);
+    if (nestedMac) return macAppSelection(nestedMac);
     const resolved = await resolveDroppedFolder(abs);
     const folderName = path.basename(abs);
     const exeBase = path.win32.basename(resolved.exePath, path.win32.extname(resolved.exePath));
@@ -449,8 +708,113 @@ function setupIpc() {
     };
   });
 
-  ipcMain.handle('settings:get', () => readSettings());
-  ipcMain.handle('settings:set', (_event, patch) => saveSettings(patch));
+  ipcMain.handle('settings:get', async () => publicSettings(await readSettings()));
+  ipcMain.handle('settings:set', async (_event, patch) => publicSettings(await saveSettings(patch)));
+
+  ipcMain.handle('ai:test', async () => {
+    const settings = await readSettings();
+    return testConnection({
+      baseUrl: settings.ai.baseUrl,
+      apiKey: settings.ai.apiKey,
+      model: settings.ai.model,
+      proxy: settings.proxy,
+      timeoutMs: Math.min(settings.ai.timeoutMs, 45000),
+    });
+  });
+
+  ipcMain.handle('ai:pick-diagnostics', async () => {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: '选择 Mac 诊断包',
+      properties: ['openFile', 'openDirectory'],
+      filters: [{ name: 'Win2Mac 诊断包', extensions: ['zip'] }],
+    });
+    if (picked.canceled || !picked.filePaths.length) return null;
+    return importDiagnostics(picked.filePaths[0]);
+  });
+
+  ipcMain.handle('ai:import-diagnostics', async (_event, target) => {
+    assertString(target, '诊断包路径');
+    return importDiagnostics(target);
+  });
+
+  ipcMain.handle('ai:fix', async (event, payload = {}) => {
+    const settings = await readSettings();
+    if (!settings.ai.apiKey) throw new Error('还没有配置 API Key，请先在设置里填写');
+    const buildId = String(payload.buildId || '');
+    if (!buildId) throw new Error('缺少构建 ID');
+    const diagnostics = payload.diagnosticsPath ? await importDiagnostics(payload.diagnosticsPath) : payload.diagnostics || null;
+    const sendEvent = (data) => {
+      if (!event.sender.isDestroyed()) event.sender.send('ai:event', data);
+    };
+    const rebuild = async (advanced = {}) => {
+      const record = await readBuildContext(buildId);
+      if (!record) throw new Error('构建记录已丢失，无法重建');
+      if (record.platform === 'windows') {
+        const runtime = await resolveElectronRuntime({
+          version: record.macAnalysis?.electronVersion,
+          proxy: settings.proxy,
+          manualZip: advanced.manualElectronZip || record.options?.manualElectronZip || '',
+          onProgress: (progress) => sendEvent({ type: 'progress', ...progress }),
+        });
+        const rebuilt = await assembleWindowsApp({
+          analysis: record.macAnalysis,
+          electronDir: runtime.dir,
+          outputDir: record.options.outputDir,
+          onProgress: (progress) => sendEvent({ type: 'progress', ...progress }),
+        });
+        record.result = { ...rebuilt, zipPath: rebuilt.zipPath, folderPath: rebuilt.folderPath };
+        await recordBuildContext(buildId, record);
+        return { zipPath: rebuilt.zipPath, folderPath: rebuilt.folderPath, platform: 'windows' };
+      }
+      const advancedNext = { ...(record.options.advanced || {}), ...advanced };
+      const result = await buildBundle(
+        {
+          app: record.app,
+          analysis: record.analysis,
+          installer: record.installer || null,
+          advanced: advancedNext,
+          outputDir: record.options.outputDir,
+          engineMode: advanced.engineMode || record.options.engineMode,
+          manualEngineArchive: record.options.manualEngineArchive || '',
+          includeRuntimes: record.options.includeRuntimes,
+          includeWineMono: record.options.includeWineMono,
+          includeUserData: record.options.includeUserData,
+          proxy: settings.proxy,
+        },
+        (progress) => sendEvent({ type: 'progress', ...progress }),
+      );
+      record.options.advanced = advancedNext;
+      record.result = { appPath: result.appPath, zipPath: result.zipPath, folderPath: result.folderPath };
+      await recordBuildContext(buildId, record);
+      return { zipPath: result.zipPath, appPath: result.appPath, platform: 'mac' };
+    };
+    const ctx = await buildFixerContext({ buildId, diagnostics, rebuild });
+    const tools = createFixerTools({ ctx });
+    const userPrompt = buildFixerPrompt({
+      appName: ctx.appName,
+      buildId,
+      platform: ctx.platform,
+      analysisSummary: ctx.analysisSummary,
+      diagnosticsSummary: ctx.diagnosticsSummary,
+    });
+    const run = await runAgent({
+      settings: {
+        ...settings.ai,
+        proxy: settings.proxy,
+      },
+      tools,
+      userPrompt,
+      maxSteps: Number(payload.maxSteps) || 8,
+      onEvent: sendEvent,
+    });
+    return {
+      buildId,
+      finished: run.finished,
+      summary: run.finalText,
+      trace: run.trace,
+      diagnostics: diagnostics ? { dir: diagnostics.dir, report: diagnostics.report } : null,
+    };
+  });
   ipcMain.handle('history:list', () => readHistory());
   ipcMain.handle('history:clear', async () => {
     await writeJson(historyFile(), []);
@@ -605,6 +969,89 @@ function setupIpc() {
 
   ipcMain.handle('apps:inspect-path', async (_event, target) => inspectDroppedPath(target));
 
+  ipcMain.handle('mactowin:pick-app', async () => {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: '选择 macOS .app（或包含 .app 的文件夹）',
+      properties: ['openDirectory'],
+    });
+    if (picked.canceled || !picked.filePaths.length) return null;
+    const target = picked.filePaths[0];
+    if (isMacAppBundle(target)) return macAppSelection(target);
+    const nested = await findMacAppIn(target);
+    if (!nested) throw new Error('所选文件夹里没有 .app');
+    return macAppSelection(nested);
+  });
+
+  ipcMain.handle('mactowin:pick-electron-zip', async () => {
+    const picked = await dialog.showOpenDialog(mainWindow, {
+      title: '选择 electron-v*-win32-x64.zip（离线用）',
+      properties: ['openFile'],
+      filters: [{ name: 'Electron Windows 运行时', extensions: ['zip'] }],
+    });
+    return picked.canceled ? '' : picked.filePaths[0] || '';
+  });
+
+  ipcMain.handle('mactowin:build', async (event, payload = {}) => {
+    const appInfo = payload.app;
+    const analysis = payload.macAnalysis || appInfo?.macAnalysis;
+    if (!analysis?.isElectron) throw new Error('当前只支持把 Electron 的 macOS 应用重组为 Windows 版');
+    const settings = await readSettings();
+    const outputDir = payload.outputDir || settings.outputDir;
+    const sendProgress = (progress) => {
+      if (!event.sender.isDestroyed()) event.sender.send('mactowin:progress', progress);
+    };
+    currentBuild = { startedAt: Date.now(), platform: 'windows' };
+    try {
+      sendProgress({ stage: 'start', message: '准备 Electron Windows 运行时…', percent: 0 });
+      const runtime = await resolveElectronRuntime({
+        version: payload.electronVersion || analysis.electronVersion,
+        proxy: payload.proxy !== undefined ? payload.proxy : settings.proxy,
+        manualZip: payload.manualElectronZip || '',
+        onProgress: sendProgress,
+      });
+      const result = await assembleWindowsApp({
+        analysis,
+        electronDir: runtime.dir,
+        outputDir,
+        onProgress: sendProgress,
+      });
+      const buildId = `${analysis.bundleId || analysis.name}-win`.replace(/[^A-Za-z0-9._-]/g, '-');
+      await recordBuildContext(buildId, {
+        buildId,
+        platform: 'windows',
+        createdAt: new Date().toISOString(),
+        app: { name: analysis.name, publisher: analysis.bundleId, version: analysis.version, installPath: analysis.path },
+        macAnalysis: analysis,
+        options: { outputDir, manualElectronZip: payload.manualElectronZip || '' },
+        result: { folderPath: result.folderPath, zipPath: result.zipPath },
+      });
+      result.buildId = buildId;
+      await appendHistory({
+        createdAt: new Date().toISOString(),
+        appName: analysis.name,
+        publisher: analysis.bundleId,
+        grade: analysis.grade,
+        zipPath: result.zipPath,
+        folderPath: result.folderPath,
+        appPath: '',
+        zipSize: result.zipSize,
+        zipSha256: result.zipSha256,
+        engineMode: 'electron',
+        engineVersion: runtime.version,
+        fileCount: result.fileCount,
+        mode: 'mactowin',
+        outputDir,
+      }).catch(() => {});
+      if (!event.sender.isDestroyed()) event.sender.send('mactowin:complete', result);
+      return result;
+    } catch (error) {
+      if (!event.sender.isDestroyed()) event.sender.send('mactowin:error', { message: error.message });
+      throw error;
+    } finally {
+      currentBuild = null;
+    }
+  });
+
   ipcMain.handle('dialog:engine-archive', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择 macOS Wine 引擎压缩包',
@@ -701,6 +1148,28 @@ function setupIpc() {
         });
       } catch (historyError) {
         console.warn('Failed to save build history:', historyError.message);
+      }
+      try {
+        await recordBuildContext(result.buildId || analysis.buildId, {
+          buildId: result.buildId || analysis.buildId,
+          platform: 'mac',
+          createdAt: new Date().toISOString(),
+          app: { name: appInfo.name, publisher: appInfo.publisher, version: appInfo.version, installPath: appInfo.installPath, exePath: appInfo.exePath },
+          installer: payload.installer || null,
+          analysis,
+          options: {
+            outputDir,
+            engineMode: payload.engineMode || settings.engineMode,
+            manualEngineArchive: payload.manualEngineArchive || '',
+            includeRuntimes: payload.includeRuntimes !== undefined ? Boolean(payload.includeRuntimes) : settings.includeRuntimes,
+            includeWineMono: payload.includeWineMono !== undefined ? Boolean(payload.includeWineMono) : settings.includeWineMono,
+            includeUserData: payload.includeUserData !== undefined ? Boolean(payload.includeUserData) : settings.includeUserData,
+            advanced: payload.advanced || {},
+          },
+          result: { appPath: result.appPath, zipPath: result.zipPath, folderPath: result.folderPath },
+        });
+      } catch (contextError) {
+        console.warn('Failed to save build context:', contextError.message);
       }
       send('build:complete', result);
       return result;

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 — 2026-10-29
+
+### Added
+
+- **AI 修复 Agent（OpenAI 兼容）**：设置页填写 Base URL / 模型 / API Key（Key 只存本机，接口只返回掩码）。构建完成后「AI 修复」可导入 Mac 诊断 ZIP，Agent 通过白名单工具读取 `Report.json`/`Missing.txt`/启动日志、修改 `config.env` 白名单键（Wine 调试级别、DLL overrides、Electron 兼容、启动参数、环境变量等），并按需重建最多 2 次，最后输出中文结论。传输层支持 HTTP 代理（curl），请求体/响应限制大小。
+- **Mac → Windows（Electron 重组）**：新增 .app 分析（XML/二进制 Info.plist、Mach-O x86_64/arm64/universal、ASAR 清单、`app.asar.unpacked` 原生模块检测）与 Windows 组装器：按原应用 Electron 版本下载 `electron-v*-win32-x64.zip`（SHASUMS256 校验、缓存），替换 `app.asar`、重命名 EXE、写入运行说明并打包 ZIP。含 macOS 原生模块或非 Electron 应用会给出明确不可行提示。
+- 应用库与空状态新增「导入 Mac 应用」，拖拽/导入 ZIP 时自动识别 `.app`。
+
+### Tests
+
+- 单元测试 52/52：新增 OpenAI 客户端（本地 mock 服务、tool_calls、401）、Agent 工具循环/步数上限、配置白名单补丁、plist/Mach-O/ASAR 分析、原生模块降级、非 Electron 拒绝、Windows 免安装包组装。
+- 打包后 smoke 增加断言：`settings.ai` 不得泄露 API Key。
+
 ## 0.4.2 — 2026-10-28
 
 ### Fixed

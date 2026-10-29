@@ -1,7 +1,7 @@
 {
   "name": "win2mac-studio",
   "productName": "Win2Mac Studio",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Package Windows applications into self-contained macOS .app bundles powered by Wine.",
   "main": "electron/main.js",
   "author": "Win2Mac Studio contributors",

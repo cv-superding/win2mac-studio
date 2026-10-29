@@ -43,6 +43,7 @@
     registry: [55, 61],
     userdata: [61, 64],
     runtime: [64, 78],
+    assemble: [64, 92],
     engine: [78, 89],
     icon: [89, 92],
     zip: [92, 99],
@@ -57,6 +58,7 @@
     registry: 'registry',
     userdata: 'userdata',
     runtime: 'runtime',
+    assemble: 'payload',
     engine: 'engine',
     icon: 'icon',
     zip: 'zip',
@@ -263,6 +265,7 @@
           <button class="btn btn-ghost" data-action="pick-exe"><svg class="icon"><use href="#i-file"></use></svg>选择 .exe</button>
           <button class="btn btn-ghost" data-action="pick-installer"><svg class="icon"><use href="#i-package"></use></svg>从安装包</button>
           <button class="btn btn-ghost" data-action="pick-archive"><svg class="icon"><use href="#i-download"></use></svg>导入 ZIP</button>
+          <button class="btn btn-ghost" data-action="pick-mac-app"><svg class="icon"><use href="#i-package"></use></svg>导入 Mac 应用</button>
         </div>
         <span class="empty-note"><svg class="icon"><use href="#i-lock"></use></svg>本地处理 · 原文件只读 · 不改动 Windows 安装</span>
       </div>`;
@@ -386,6 +389,7 @@
           </span>
           <button class="btn btn-ghost btn-sm" data-action="pick-installer"><svg class="icon"><use href="#i-package"></use></svg>安装包</button>
           <button class="btn btn-ghost btn-sm" data-action="pick-archive"><svg class="icon"><use href="#i-download"></use></svg>导入 ZIP</button>
+          <button class="btn btn-ghost btn-sm" data-action="pick-mac-app"><svg class="icon"><use href="#i-package"></use></svg>导入 Mac 应用</button>
           <button class="btn btn-ghost btn-sm" data-action="import-recipe"><svg class="icon"><use href="#i-download"></use></svg>导入配方</button>
           <button class="btn btn-ghost btn-sm ${state.batchMode ? 'is-active' : ''}" data-action="toggle-batch"><svg class="icon"><use href="#i-layers"></use></svg>批量</button>
         </div>
@@ -1038,27 +1042,31 @@
     }
     if (build.step === 'done') {
       const result = build.result || {};
+      const isWindows = result.platform === 'windows';
       modalRoot.innerHTML = `
         <div class="modal-scrim">
           <div class="modal" role="dialog" aria-modal="true" aria-label="转换完成" tabindex="-1">
             <div class="modal-body">
               <div class="done-view">
                 <div class="done-icon"><svg class="icon"><use href="#i-check"></use></svg></div>
-                <h3>转换完成</h3>
-                <p>${result.mode === 'installer' ? '安装器已打包；首次在 Mac 启动会先运行安装程序。' : `${esc(app.name)} 已打包为可拷贝到 Mac 的 .app 与 ZIP。`}</p>
+                <h3>${isWindows ? 'Windows 版已生成' : '转换完成'}</h3>
+                <p>${isWindows
+                  ? `${esc(app.name)} 已由 macOS Electron 载荷重组为 Windows 免安装版。`
+                  : result.mode === 'installer' ? '安装器已打包；首次在 Mac 启动会先运行安装程序。' : `${esc(app.name)} 已打包为可拷贝到 Mac 的 .app 与 ZIP。`}</p>
                 <div class="done-stats">
                   <div class="done-stat"><b>${result.fileCount ? result.fileCount.toLocaleString('zh-CN') : '—'}</b><span>原样文件</span></div>
                   <div class="done-stat"><b>${fmtBytes(result.zipSize)}</b><span>ZIP 大小</span></div>
-                  <div class="done-stat"><b>${esc(result.engine?.version || 'Wine')}</b><span>运行引擎</span></div>
+                  <div class="done-stat"><b>${esc(result.engine?.version || (isWindows ? 'Electron' : 'Wine'))}</b><span>运行引擎</span></div>
                 </div>
                 <div class="done-path"><svg class="icon"><use href="#i-folder"></use></svg><code title="${esc(result.folderPath)}">${esc(result.folderPath)}</code></div>
                 ${result.warnings?.length ? `<div class="warning-inline" style="text-align:left;max-width:540px;margin:0 auto 14px;"><svg class="icon"><use href="#i-alert"></use></svg><span>打包过程中有 ${result.warnings.length} 条警告，已写入使用说明。大体积或系统级应用请先在 Mac 上验证。</span></div>` : ''}
                 <div class="done-actions">
                   <button class="btn btn-ghost" data-action="show-zip">在文件夹中显示</button>
                   <button class="btn btn-primary" data-action="open-output"><svg class="icon"><use href="#i-folder"></use></svg>打开输出目录</button>
+                  <button class="btn btn-ghost" data-action="ai-fix" data-build-id="${esc(result.buildId || '')}"><svg class="icon"><use href="#i-spark"></use></svg>AI 修复</button>
                   <button class="btn btn-accent" data-action="done-close">完成</button>
                 </div>
-                <div class="progress-note" style="justify-content:center;">SHA-256 ${esc((result.zipSha256 || '').slice(0, 16))}… · 首次启动运行 Open-Win2Mac-App.command · Mac 诊断双击 Start-Mac-Validation.command</div>
+                <div class="progress-note" style="justify-content:center;">${isWindows ? '直接双击 EXE 运行 · 首次可能被 SmartScreen 拦截' : 'SHA-256 ' + esc((result.zipSha256 || '').slice(0, 16)) + '… · 首次启动运行 Open-Win2Mac-App.command · Mac 诊断双击 Start-Mac-Validation.command'}</div>
               </div>
             </div>
           </div>
@@ -1281,6 +1289,28 @@
                 <div class="kv"><span>架构</span><b>x86_64 · Apple Silicon 需 Rosetta</b></div>
                 <div class="kv"><span>资产</span><b>${esc(state.info?.enginePinned?.size || '184.2 MB')}</b></div>
               </div>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <h2>AI 修复（OpenAI 兼容）</h2>
+            <p>接口需兼容 /chat/completions，可填 OpenAI、DeepSeek、通义、本地 LM Studio 等。构建完成后点「AI 修复」，它会读取 Mac 诊断包、改配置并按需重建。</p>
+            <div class="settings-field">
+              <label>Base URL</label>
+              <input type="text" id="ai-base-url" value="${esc(s.ai?.baseUrl || 'https://api.openai.com/v1')}" placeholder="https://api.openai.com/v1">
+            </div>
+            <div class="settings-field">
+              <label>模型</label>
+              <input type="text" id="ai-model" value="${esc(s.ai?.model || 'gpt-4o-mini')}" placeholder="gpt-4o-mini">
+            </div>
+            <div class="settings-field">
+              <label>API Key${s.ai?.hasKey ? `（已保存 ${esc(s.ai.keyHint)}）` : ''}</label>
+              <input type="password" id="ai-key" value="" placeholder="${s.ai?.hasKey ? '留空表示不修改' : 'sk-...'}" autocomplete="off">
+            </div>
+            <label class="settings-toggle"><input type="checkbox" id="ai-clear-key"><span>清除已保存的 Key</span></label>
+            <div class="settings-foot" style="margin-top:8px;display:flex;gap:8px;">
+              <button class="btn btn-primary btn-sm" data-action="save-ai">保存</button>
+              <button class="btn btn-ghost btn-sm" data-action="test-ai">测试连接</button>
             </div>
           </section>
 
@@ -1577,6 +1607,137 @@
       selectApp(app.id);
       toast(`已选择 ${app.name}`, 'success');
     }).catch((error) => toast(error.message, 'error'));
+  }
+
+  function addImportedApp(app) {
+    state.apps = [app, ...state.apps.filter((item) => item.id !== app.id)];
+    state.scanError = null;
+    state.archiveProgress = null;
+    renderPage();
+    selectApp(app.id);
+  }
+
+  async function saveAiSettings() {
+    const baseUrl = $('#ai-base-url')?.value.trim() || '';
+    const model = $('#ai-model')?.value.trim() || '';
+    const keyInput = $('#ai-key');
+    const patch = { ai: { baseUrl, model } };
+    if (keyInput?.value.trim()) patch.ai.apiKey = keyInput.value.trim();
+    if ($('#ai-clear-key')?.checked) patch.ai.clearKey = true;
+    try {
+      state.settings = await api.setSettings(patch);
+      if (keyInput) keyInput.value = '';
+      renderSettings();
+      toast('AI 接口设置已保存', 'success');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  async function testAiSettings() {
+    try {
+      const result = await api.aiTest();
+      toast(`连接成功：${result.latencyMs} ms${result.reply ? ` · ${result.reply}` : ''}`, 'success');
+    } catch (error) {
+      toast(`连接失败：${error.message}`, 'error');
+    }
+  }
+
+  async function pickMacApp() {
+    if (!api.pickMacApp) {
+      toast('当前环境不支持导入 macOS 应用', 'warn');
+      return;
+    }
+    if (state.build || state.batch) {
+      toast('请先完成当前任务', 'warn');
+      return;
+    }
+    try {
+      const picked = await api.pickMacApp();
+      if (!picked) return;
+      if (state.page !== 'library') state.page = 'library';
+      addImportedApp(picked.app);
+      toast(`已导入 macOS 应用：${picked.app.name}`, 'success');
+      openBuildForApp(picked.app);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  let aiPanel = null;
+
+  function aiStatusLine(text) {
+    const line = document.createElement('div');
+    line.className = 'ai-line';
+    line.textContent = text;
+    if (aiPanel) {
+      aiPanel.log.appendChild(line);
+      aiPanel.log.scrollTop = aiPanel.log.scrollHeight;
+    }
+  }
+
+  async function openAiFixPanel(buildId) {
+    if (!buildId) {
+      toast('缺少构建记录，无法修复', 'warn');
+      return;
+    }
+    if (aiPanel) aiPanel.overlay.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'ai-overlay';
+    overlay.innerHTML = `
+      <div class="ai-panel" role="dialog" aria-label="AI 修复">
+        <header><b>AI 修复</b><span class="ai-sub">读取诊断 → 修改配置 → 重新构建</span><button class="icon-btn" data-ai-close aria-label="关闭">✕</button></header>
+        <div class="ai-toolbar">
+          <button class="btn btn-ghost btn-sm" data-ai-diagnostics>导入 Mac 诊断 ZIP</button>
+          <label class="ai-check"><input type="checkbox" data-ai-rebuild checked> 允许 AI 重新构建（最多 2 次）</label>
+          <button class="btn btn-primary btn-sm" data-ai-run>开始诊断</button>
+        </div>
+        <div class="ai-log"></div>
+        <footer class="ai-foot"></footer>
+      </div>`;
+    document.body.appendChild(overlay);
+    aiPanel = { overlay, log: overlay.querySelector('.ai-log'), foot: overlay.querySelector('.ai-foot'), diagnosticsPath: '' };
+    overlay.querySelector('[data-ai-close]').onclick = () => { overlay.remove(); aiPanel = null; };
+    const diagBtn = overlay.querySelector('[data-ai-diagnostics]');
+    diagBtn.onclick = async () => {
+      try {
+        const picked = await api.aiPickDiagnostics();
+        if (!picked) return;
+        aiPanel.diagnosticsPath = picked.dir;
+        aiStatusLine(`已载入诊断包：${picked.dir}`);
+        diagBtn.textContent = '已载入诊断包';
+      } catch (error) {
+        aiStatusLine(`诊断包读取失败：${error.message}`);
+      }
+    };
+    overlay.querySelector('[data-ai-run]').onclick = async (event) => {
+      const button = event.currentTarget;
+      const allowRebuild = overlay.querySelector('[data-ai-rebuild]').checked;
+      button.disabled = true;
+      aiStatusLine('正在请求模型…');
+      const unsubscribe = api.onAiEvent ? api.onAiEvent((data) => {
+        if (!aiPanel) return;
+        if (data.type === 'tool') aiStatusLine(`→ ${data.name} ${JSON.stringify(data.arguments || {}).slice(0, 200)}`);
+        else if (data.type === 'toolResult') aiStatusLine(`  ${String(data.result || '').split('\n').slice(0, 3).join(' / ').slice(0, 300)}`);
+        else if (data.type === 'assistant') aiStatusLine(`模型：${String(data.content || '').slice(0, 400)}`);
+        else if (data.type === 'progress') aiStatusLine(`  [${data.stage}] ${data.message || ''}`);
+        else if (data.type === 'step') aiStatusLine(`—— 第 ${data.step}/${data.maxSteps} 步 ——`);
+      }) : () => {};
+      try {
+        const result = await api.aiFix({
+          buildId,
+          diagnosticsPath: aiPanel.diagnosticsPath || undefined,
+          maxSteps: allowRebuild ? 8 : 5,
+        });
+        aiStatusLine('完成');
+        aiPanel.foot.innerHTML = `<div class="ai-summary">${esc(result.summary || '模型未给出总结')}</div>`;
+      } catch (error) {
+        aiStatusLine(`失败：${error.message}`);
+      } finally {
+        unsubscribe();
+        button.disabled = false;
+      }
+    };
   }
 
   async function pickArchive() {
@@ -2001,6 +2162,29 @@
     build.message = '正在准备转换…';
     build.log = [];
     renderModal();
+    if (build.app?.platform === 'mac') {
+      try {
+        const result = await api.buildWindowsApp({
+          app: build.app,
+          macAnalysis: build.app.macAnalysis,
+          outputDir: build.options.outputDir,
+          electronVersion: build.app.macAnalysis?.electronVersion,
+        });
+        build.result = result;
+        build.step = 'done';
+        build.progress = 100;
+        state.history = await api.history();
+        updateChrome();
+        renderModal();
+        if (state.page === 'tasks') renderTasks();
+        toast('已生成 Windows 免安装包', 'success');
+      } catch (error) {
+        build.step = 'error';
+        build.error = error.message;
+        renderModal();
+      }
+      return;
+    }
     const payload = {
       app: build.app,
       services: state.services,
@@ -2221,6 +2405,18 @@
         break;
       case 'pick-archive':
         pickArchive();
+        break;
+      case 'pick-mac-app':
+        pickMacApp();
+        break;
+      case 'ai-fix':
+        openAiFixPanel(element?.dataset?.buildId || state.build?.result?.buildId || '');
+        break;
+      case 'save-ai':
+        saveAiSettings();
+        break;
+      case 'test-ai':
+        testAiSettings();
         break;
       case 'import-recipe':
         importRecipe();
@@ -2506,6 +2702,9 @@
   if (api.onBuildProgress) api.onBuildProgress((progress) => {
     handleBuildProgress(progress);
     handleBatchProgress(progress);
+  });
+  if (api.onWindowsProgress) api.onWindowsProgress((progress) => {
+    handleBuildProgress(progress);
   });
   if (api.onIcons) {
     api.onIcons((icons) => {

@@ -41,6 +41,8 @@ Windows 应用迁移到 Mac，现有工具几乎都在 Mac 端操作（Whisky、
 - **缓存管理**：设置页统计并清理引擎、运行库与中断的临时构建目录，不会动已生成的 `.app`/ZIP。
 - **macOS 验证**：`npm test` 内含假 Darwin + 假 Wine 的启动器测试（同一套测试可在 macOS 原生运行），并提供 GitHub Actions `macos-14`/`macos-15` 工作流。
 - **Mac 一键诊断**：每个转换产物包含 `Start-Mac-Validation.command`。朋友双击即检查系统、Rosetta、Gatekeeper、引擎、文件清单/完整性，并用 `--debug` 启动应用；桌面生成 `Win2Mac-验证日志-*.log` 与 `Win2Mac-诊断-*.zip`（含 `Report.md` / `Report.json` / `Missing.txt` / `Repair.md` / `System` / `Prefix` / `Logs`）。启动器自身失败时也会自动生成 `Win2Mac-失败诊断-*.zip`；也可用 `npm run mac-check` 生成可独立发送的工具包。报告字段与修复流程见 [docs/DIAGNOSTICS.md](docs/DIAGNOSTICS.md)。
+- **AI 修复（OpenAI 兼容）**：设置页可填任意兼容 `/chat/completions` 的接口（OpenAI、DeepSeek、通义、本地 LM Studio 等）。转换完成后点「AI 修复」，导入朋友回传的 Mac 诊断 ZIP，Agent 会调用白名单工具（读报告/搜日志/改 `config.env`/重新构建最多 2 次）定位问题并给出中文总结；API Key 只存本机 `settings.json`，不会传给渲染层。
+- **Mac → Windows（Electron 重组）**：导入 `.app` 或含 `.app` 的 ZIP，解析 Info.plist / Mach-O / ASAR；纯 JS 的 Electron 应用会下载对应版本 Electron Windows 运行时（SHASUMS256 校验），重组成免安装 Windows 目录 + ZIP，不依赖 Wine。含 macOS 原生 `.node` 模块或非 Electron 应用会明确提示不可行。
 - **产物**：标准 `.app` 目录 + ZIP（Unix mode 0755/0644）+ 完整性清单 + 中文 `README-使用说明.html` + 修复/校验/重置/验证脚本。
 - **Windows 桌面 UI**：原生无边框窗口、应用库、详情抽屉、兼容性页、转换进度、历史记录、设置、诊断；不修改原应用、不上传数据。
 
@@ -68,7 +70,7 @@ Windows 应用迁移到 Mac，现有工具几乎都在 Mac 端操作（Whisky、
 
 ### 最终用户（Windows 10/11 x64）
 
-1. 从 [GitHub Releases](https://github.com/cv-superding/win2mac-studio/releases) 下载并运行 `Win2Mac-Studio-Setup-0.4.2.exe`（未签名，SmartScreen 可能提示“更多信息 → 仍要运行”）。
+1. 从 [GitHub Releases](https://github.com/cv-superding/win2mac-studio/releases) 下载并运行 `Win2Mac-Studio-Setup-0.5.0.exe`（未签名，SmartScreen 可能提示“更多信息 → 仍要运行”）。
 2. 打开应用，点击“扫描已安装应用”。
 3. 点选应用查看分级与原因；确认后点“一键转换为 .app”。也可以在「设置」中改默认引擎，或用“批量”多选后队列转换。
 4. 有安装包时点“从安装包创建”，选择 `.exe`/`.msi`，填写预期主程序名（推荐）后打包；首次在 Mac 启动会自动运行安装器。
@@ -106,7 +108,7 @@ npm install
 npm run dist
 ```
 
-输出在 `release/Win2Mac-Studio-Setup-0.4.2.exe`。构建时 electron-builder 需要网络下载 NSIS 工具链；CI/国内网络请配置代理。
+输出在 `release/Win2Mac-Studio-Setup-0.5.0.exe`。构建时 electron-builder 需要网络下载 NSIS 工具链；CI/国内网络请配置代理。
 
 ## 三种引擎策略
 
@@ -181,7 +183,7 @@ npm run test:e2e :: 打包/首启二启/引擎下载/安装器工作流
 - 内置引擎：真实 xz 解压、缓存、引擎路径发现与启动；Gcenx Wine 11.18 真实下载、SHA-256 校验、内置包生成（186 MB ZIP）。
 - 运行时引擎下载：本地 HTTP 下载 → SHA-256 → 解压 → 启动；第二次启动复用缓存且不重复下载。
 - VC++ 运行时：真实下载 + Microsoft Authenticode 校验 + 模拟安装流程；Windows 服务依赖改为 C 级提示，不再误判 D。
-- 打包后的 Electron 应用通过无窗口 smoke test（preload 桥接、四个导航页面、版本 0.4.2）；真实 IPC 扫描 UI 也通过离屏 smoke-scan（172 应用 / 172 图标 / 0 分析挂起）。
+- 打包后的 Electron 应用通过无窗口 smoke test（preload 桥接、四个导航页面、版本 0.5.0）；真实 IPC 扫描 UI 也通过离屏 smoke-scan（172 应用 / 172 图标 / 0 分析挂起）。
 
 **macOS CI**：仓库内提供 [`.github/workflows/macos-verify.yml`](.github/workflows/macos-verify.yml)，在 `macos-14`/`macos-15` 上跑 `bash -n`、单元测试与真实 Darwin 启动器模拟。另有手动 `macos-real-smoke.yml`，只能在有 GUI/WindowServer 的 self-hosted Mac 上运行；GitHub 托管 Runner 无图形会话，Wine 无法启动 `win32k.sys`，不能验证真实窗口。
 
