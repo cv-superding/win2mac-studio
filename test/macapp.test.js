@@ -160,6 +160,17 @@ test('组装 Windows 免安装包：重命名 exe、写入载荷与说明', asyn
     assert.ok(fs.existsSync(result.zipPath));
     assert.ok(result.zipSize > 0);
     assert.equal(result.platform, 'windows');
+    const entries = await new Promise((resolve, reject) => {
+      const names = [];
+      require('yauzl').open(result.zipPath, { lazyEntries: true }, (error, zip) => {
+        if (error) return reject(error);
+        zip.on('entry', (entry) => { names.push(entry.fileName); zip.readEntry(); });
+        zip.on('end', () => resolve(names));
+        zip.readEntry();
+      });
+    });
+    assert.ok(entries.some((name) => name.endsWith('Demo.exe')), entries.join(','));
+    assert.equal(entries.some((name) => name.endsWith('.zip')), false, 'ZIP 不能把自身写进包里');
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }

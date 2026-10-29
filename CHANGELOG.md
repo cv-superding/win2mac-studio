@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 — 2026-10-29
+
+### Fixed
+
+- **ZIP 可能包含自身**：`writeZip` 先创建目标文件再枚举目录，若 ZIP 位于输出目录内（Mac→Windows 产物），macOS 15 上会把正在写入的 ZIP 当成输入，yazl 报 “unexpected number of bytes”。现在先枚举并排除目标文件，测试断言 ZIP 内不含 `.zip`。
+- 0.5.1 重新打包安装包、便携版与 MacCheck；0.5.0 已标为 pre-release。
+
 ## 0.5.0 — 2026-10-29
 
 ### Added
