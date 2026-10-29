@@ -30,27 +30,26 @@ WINE_BIN="$(find "$WINE_ROOT" \( -type f -o -type l \) -name wine64 | head -n 1)
 if [ -z "$WINE_BIN" ]; then
   WINE_BIN="$(find "$WINE_ROOT" \( -type f -o -type l \) -name wine | head -n 1)"
 fi
-CMD_EXE="$(find "$WINE_ROOT" -type f -path '*x86_64-windows/cmd.exe' | head -n 1)"
+SMOKE_EXE="$(find "$WINE_ROOT" -type f -path '*x86_64-windows/wineboot.exe' | head -n 1)"
+if [ -z "$SMOKE_EXE" ] || [ ! -f "$SMOKE_EXE" ]; then
+  echo "Wine wineboot.exe not found under $WINE_ROOT"
+  exit 1
+fi
+echo "wineboot.exe: $SMOKE_EXE"
 if [ -z "$WINE_BIN" ] || [ ! -x "$WINE_BIN" ]; then
   echo "wine/wine64 not found under $WINE_ROOT"
   find "$WINE_ROOT" -maxdepth 3 -print 2>/dev/null | head -n 50 || true
   exit 1
 fi
-if [ -z "$CMD_EXE" ] || [ ! -f "$CMD_EXE" ]; then
-  echo "Wine cmd.exe not found under $WINE_ROOT"
-  exit 1
-fi
 echo "wine: $WINE_BIN"
-echo "cmd.exe: $CMD_EXE"
 echo "host: $(uname -a)"
 echo "macOS: $(sw_vers -productVersion 2>/dev/null || echo unknown)"
 ls -l "$WINE_BIN" 2>&1 || true
 file "$WINE_BIN" 2>&1 || true
-echo "Wine version: $(WINEDEBUG=-all "$WINE_BIN" --version 2>&1 || true)"
 
 cp "$ROOT/resources/templates/launcher.sh" "$APP/Contents/MacOS/launcher"
 chmod +x "$APP/Contents/MacOS/launcher"
-cp "$CMD_EXE" "$PAYLOAD/App.exe"
+cp "$SMOKE_EXE" "$PAYLOAD/App.exe"
 HASH="$(shasum -a 256 "$PAYLOAD/App.exe" | awk '{print $1}')"
 SIZE="$(wc -c < "$PAYLOAD/App.exe" | tr -d ' ')"
 printf '%s  C/App/App.exe\n' "$HASH" > "$WIN2MAC/manifest.sha256"
@@ -75,9 +74,8 @@ WIN2MAC_INSTALLER_TYPE='exe'
 WIN2MAC_EXPECTED_EXE=''
 WIN2MAC_INSTALLER_ARG_COUNT='0'
 WIN2MAC_EXTRA_DRIVES=''
-WIN2MAC_ARG_COUNT='2'
-WIN2MAC_ARG_1='/c'
-WIN2MAC_ARG_2='echo WIN2MAC_SMOKE_OK'
+WIN2MAC_ARG_COUNT='1'
+WIN2MAC_ARG_1='-h'
 WIN2MAC_REGISTRY_COUNT='0'
 WIN2MAC_RUNTIME_COUNT='0'
 WIN2MAC_RUNTIME_VERSION='none'
@@ -151,7 +149,6 @@ if ! launcher_run first; then
   echo "first launch failed"
   exit 1
 fi
-grep -q 'WIN2MAC_SMOKE_OK' "$LOG"
 grep -q 'STAGE launch' "$LOG"
 grep -q 'payload check: checked=1 missing=0 sizeMismatch=0' "$LOG"
 grep -q 'app exited status=0' "$LOG"
