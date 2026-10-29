@@ -10,8 +10,10 @@ const { spawn } = require('node:child_process');
 const yazl = require('yazl');
 
 const { analyzeApp } = require('./analyzer');
+const { DEFAULT_ELECTRON_FLAGS, detectElectronApp, findHostAdb } = require('./electron');
 const { buildAppIcon } = require('./icons');
 const { buildInfoPlist } = require('./plist');
+const { generateRegistryKeys } = require('./registry');
 const { resolveEngine } = require('./resolver');
 const { downloadFile } = require('./download');
 const {
@@ -147,12 +149,18 @@ function normalizeAdvanced(input = {}) {
     addEnv(trimmed.slice(0, eq).trim(), trimmed.slice(eq + 1));
   }
   const wineDebug = ['off', 'warn', 'all'].includes(input.wineDebug) ? input.wineDebug : 'off';
+  const electronCompat = input.electronCompat !== false;
+  const electronFlags = electronCompat
+    ? parseCommandLine(String(input.electronFlags || '').trim() || DEFAULT_ELECTRON_FLAGS.join(' '))
+    : [];
   return {
     env: [...env.entries()].map(([name, value]) => ({ name, value })),
     verifyIntegrity: Boolean(input.verifyIntegrity),
     preventSleep: Boolean(input.preventSleep),
     wineDebug,
     launchArgs: String(input.launchArgs || ''),
+    electronCompat,
+    electronFlags,
   };
 }
 
@@ -219,7 +227,7 @@ async function copyFileWithProgress(source, dest, { onBytes, onProgress } = {}) 
   return { sha256: hash.digest('hex'), size: bytes, mtime: st.mtime };
 }
 
-async function copyPayloadTree({ installPath, payloadRoot, manifest, warnings, onProgress }) {
+async function copyPayloadTree({ installPath, payloadRoot, manifest, index, warnings, onProgress }) {
   emit(onProgress, 'enumerate', '正在枚举应用文件…');
   const walk = await walkFiles(installPath);
   if (walk.truncated) {
@@ -234,6 +242,7 @@ async function copyPayloadTree({ installPath, payloadRoot, manifest, warnings, o
   let copiedBytes = 0;
   let copiedFiles = 0;
   let failedFiles = 0;
+  const failedPaths = [];
   let lastProgressAt = 0;
 
   for (const file of walk.files) {
@@ -263,11 +272,17 @@ async function copyPayloadTree({ installPath, payloadRoot, manifest, warnings, o
         },
       });
       manifest.push(`${copied.sha256}  ${toPosix(path.relative(payloadRoot, dest))}`);
+      if (index) index.push(`${copied.sha256}\t${copied.size}\t${toPosix(path.relative(payloadRoot, dest))}`);
       copiedFiles += 1;
     } catch (error) {
       failedFiles += 1;
+      failedPaths.push(relativePosix);
       warnings.push({ severity: 'warn', message: `复制失败：${file.path}（${error.message}）` });
     }
+  }
+
+  if (failedFiles > 0) {
+    throw new Error(`有 ${failedFiles} 个文件复制失败（例如：${failedPaths.slice(0, 5).join('、')}）。请关闭占用这些文件的应用后重试。`);
   }
 
   for (const warning of walk.warnings) {
@@ -283,14 +298,23 @@ async function copyPayloadTree({ installPath, payloadRoot, manifest, warnings, o
   };
 }
 
-async function exportRegistryKeys(keys, registryDir, warnings) {
+function registryKeyExists(key) {
+  return new Promise((resolve) => {
+    const child = spawn(REG_EXE, ['query', key], { windowsHide: true });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
+async function exportRegistryKeys(keys, registryDir, warnings, { skipMissing = false } = {}) {
   await ensureDir(registryDir);
   const files = [];
-  for (let i = 0; i < keys.length; i += 1) {
-    const key = String(keys[i] || '').trim();
+  for (const rawKey of keys) {
+    const key = String(rawKey || '').trim();
     if (!key) continue;
-    const dest = path.join(registryDir, `${i + 1}.reg`);
-    const ok = await new Promise((resolve) => {
+    if (skipMissing && !(await registryKeyExists(key))) continue;
+    const dest = path.join(registryDir, `${files.length + 1}.reg`);
+    await new Promise((resolve) => {
       const child = spawn(REG_EXE, ['export', key, dest, '/y'], { windowsHide: true });
       let stderr = '';
       child.stderr.on('data', (chunk) => {
@@ -302,7 +326,7 @@ async function exportRegistryKeys(keys, registryDir, warnings) {
       });
       child.on('close', (code) => {
         if (code === 0 && fs.existsSync(dest)) {
-          files.push({ key, file: `${i + 1}.reg` });
+          files.push({ key, file: path.basename(dest) });
           resolve(true);
         } else {
           warnings.push({ severity: 'warn', message: `导出注册表失败：${key}${stderr ? `（${stderr.trim().slice(0, 200)}）` : ''}` });
@@ -310,7 +334,6 @@ async function exportRegistryKeys(keys, registryDir, warnings) {
         }
       });
     });
-    void ok;
   }
   return files;
 }
@@ -423,11 +446,11 @@ async function buildRuntimePlan({ analysis, options, runtimesDir, warnings, onPr
   return runtimes;
 }
 
-async function copyUserData({ app, win2macDir, warnings, onProgress }) {
+async function copyUserData({ app, win2macDir, warnings, onProgress, extraNames = [] }) {
   const roaming = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
   const local = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const candidates = new Set(
-    [app.name, path.win32.basename(app.exePath || '', '.exe'), app.publisher]
+    [app.name, path.win32.basename(app.exePath || '', '.exe'), app.publisher, ...extraNames]
       .map((value) => String(value || '').trim())
       .filter((value) => value.length >= 3 && !/^(microsoft|google|common|adobe)$/i.test(value)),
   );
@@ -571,7 +594,7 @@ async function writeZip({ rootDir, rootName, zipPath, onProgress, expectedFiles 
   return stats;
 }
 
-function buildConfigLines({ app, bundleId, buildId, payloadVersion, payloadInfo, args, installer, installerArgs, installerPayload, installerWin, engineInfo, runtimes, registryFiles, userData, advanced, dirs }) {
+function buildConfigLines({ app, bundleId, buildId, payloadVersion, payloadInfo, args, installer, installerArgs, installerPayload, installerWin, engineInfo, runtimes, registryFiles, userData, advanced, dirs, electron, hostAdb }) {
   const lines = [];
   const put = (key, value) => lines.push(`${key}=${shellQuote(value == null ? '' : String(value))}`);
   put('WIN2MAC_FORMAT', '1');
@@ -594,6 +617,14 @@ function buildConfigLines({ app, bundleId, buildId, payloadVersion, payloadInfo,
   put('WIN2MAC_EXTRA_DRIVES', dirs.extraDrives.join(','));
   put('WIN2MAC_ARG_COUNT', args.length);
   args.forEach((arg, index) => put(`WIN2MAC_ARG_${index + 1}`, arg));
+  const electronFlags = electron?.isElectron ? advanced.electronFlags : [];
+  put('WIN2MAC_ELECTRON', electron?.isElectron ? '1' : '0');
+  put('WIN2MAC_ELECTRON_COMPAT', advanced.electronCompat ? '1' : '0');
+  put('WIN2MAC_ELECTRON_NAME', electron?.packageName || '');
+  put('WIN2MAC_ELECTRON_ARG_COUNT', electronFlags.length);
+  electronFlags.forEach((arg, index) => put(`WIN2MAC_ELECTRON_ARG_${index + 1}`, arg));
+  put('WIN2MAC_HOST_ADB_ARM', hostAdb?.arm64 || '');
+  put('WIN2MAC_HOST_ADB_X86', hostAdb?.x86_64 || '');
   put('WIN2MAC_REGISTRY_COUNT', registryFiles.length);
   registryFiles.forEach((item, index) => put(`WIN2MAC_REGISTRY_${index + 1}`, `registry/${item.file}`));
   put('WIN2MAC_RUNTIME_COUNT', runtimes.length);
@@ -610,7 +641,7 @@ function buildConfigLines({ app, bundleId, buildId, payloadVersion, payloadInfo,
     put(`WIN2MAC_USERDATA_${index + 1}_TARGET`, item.target);
   });
   put('WIN2MAC_DLL_OVERRIDES', 'mshtml=');
-  put('WIN2MAC_WINEDEBUG', advanced.wineDebug === 'warn' ? 'warn' : advanced.wineDebug === 'all' ? '+all' : '-all');
+  put('WIN2MAC_WINEDEBUG', advanced.wineDebug === 'all' ? '+all' : advanced.wineDebug === 'warn' ? 'warn' : '-all');
   put('WIN2MAC_ENV_COUNT', advanced.env.length);
   advanced.env.forEach((item, index) => {
     put(`WIN2MAC_ENV_${index + 1}_NAME`, item.name);
@@ -730,6 +761,7 @@ async function buildBundle(input, onProgress) {
     await ensureDir(runtimesDir);
 
     const manifest = [];
+    const payloadIndex = [];
     let payloadInfo;
     let exePayload = '';
     let workdirPayload = '';
@@ -761,7 +793,7 @@ async function buildBundle(input, onProgress) {
           message: `原应用工作目录 ${app.externalWorkingDirectory} 不在安装目录内，未随载荷复制；启动器会改用主程序所在目录。`,
         });
       }
-      payloadInfo = await copyPayloadTree({ installPath: app.installPath, payloadRoot, manifest, warnings, onProgress });
+      payloadInfo = await copyPayloadTree({ installPath: app.installPath, payloadRoot, manifest, index: payloadIndex, warnings, onProgress });
       if (payloadInfo.copiedFiles === 0) throw new Error('没有复制到任何应用文件，请检查安装目录权限。');
 
       const exeRel = path.relative(app.installPath, app.exePath);
@@ -783,18 +815,78 @@ async function buildBundle(input, onProgress) {
     manifest.sort((a, b) => a.localeCompare(b));
     const manifestText = `${manifest.join('\n')}\n`;
     await fsp.writeFile(path.join(win2macDir, 'manifest.sha256'), manifestText, 'utf8');
+    payloadIndex.sort((a, b) => (a.split('\t')[2] || '').localeCompare(b.split('\t')[2] || ''));
+    if (payloadIndex.length) {
+      const indexLines = ['sha256\tbytes\tpath', ...payloadIndex];
+      await fsp.writeFile(path.join(win2macDir, 'payload-index.tsv'), `${indexLines.join('\n')}\n`, 'utf8');
+      const indexJson = {
+        format: 1,
+        generatedAt: new Date().toISOString(),
+        files: payloadIndex.map((line) => {
+          const [sha256, bytes, filePath] = line.split('\t');
+          return { path: filePath, bytes: Number(bytes), sha256 };
+        }),
+      };
+      await fsp.writeFile(path.join(win2macDir, 'payload-index.json'), `${JSON.stringify(indexJson, null, 2)}\n`, 'utf8');
+    }
     const payloadVersion = `${crypto.createHash('sha1').update(manifestText).digest('hex').slice(0, 12)}-${Date.now().toString(36)}`;
+
+    let electronInfo = { isElectron: false };
+    let hostAdb = { arm64: '', x86_64: '' };
+    if (!installer) {
+      electronInfo = await detectElectronApp(app.installPath);
+      if (electronInfo.isElectron) {
+        const label = electronInfo.productName || electronInfo.packageName;
+        warnings.push({
+          severity: 'info',
+          message: `检测到 Electron 应用${label ? `（${label}）` : ''}：启动时自动加入 ${options.advanced.electronFlags.join(' ') || '无额外参数'}。`,
+        });
+        if (electronInfo.nativeModuleCount) {
+          if (analysis.dependencies) analysis.dependencies.vcrun = true;
+          warnings.push({
+            severity: 'info',
+            message: `检测到 ${electronInfo.nativeModuleCount} 个原生模块（.node）：已加入 VC++ 运行库，避免 better-sqlite3 等模块在 Wine 中加载失败。`,
+          });
+        }
+      }
+      const hostAdbRaw = await findHostAdb(app.installPath);
+      if (hostAdbRaw.arm64 || hostAdbRaw.x86_64) {
+        const installPayload = toPosix(payloadRelativeForWindowsPath(app.installPath)).replace(/\/+$/, '');
+        const toPayload = (rel) => (rel ? `${installPayload}/${rel}` : '');
+        hostAdb = {
+          arm64: toPayload(hostAdbRaw.arm64),
+          x86_64: toPayload(hostAdbRaw.x86_64),
+        };
+        warnings.push({
+          severity: 'info',
+          message: '检测到 macOS 版 adb：启动时会尝试在本机启动 ADB 服务，并让 Wine 内的 adb/scrcpy 通过 localhost 连接。该桥接为实验性功能。',
+        });
+      }
+    }
 
     let registryFiles = [];
     if (!installer) {
       emit(onProgress, 'registry', '正在导出注册表快照（用于保持应用配置）…');
-      registryFiles = await exportRegistryKeys(app.registryKeys || [], registryDir, warnings);
+      const registryCandidates = generateRegistryKeys({ app, electron: electronInfo });
+      registryFiles = await exportRegistryKeys(registryCandidates, registryDir, warnings, { skipMissing: true });
+      if (registryFiles.length > (app.registryKeys || []).length) {
+        warnings.push({
+          severity: 'info',
+          message: `已额外捕获 ${registryFiles.length - (app.registryKeys || []).length} 个应用相关注册表键；其中可能含许可证或账号信息，请只在可信设备间传递安装包。`,
+        });
+      }
     }
 
     let userData = [];
     if (!installer && options.includeUserData) {
       emit(onProgress, 'userdata', '正在包含用户数据（可选）…');
-      userData = await copyUserData({ app, win2macDir, warnings, onProgress });
+      userData = await copyUserData({
+        app,
+        win2macDir,
+        warnings,
+        onProgress,
+        extraNames: [electronInfo.packageName, electronInfo.productName].filter(Boolean),
+      });
     }
 
     emit(onProgress, 'runtime', '正在准备运行时组件…');
@@ -888,6 +980,8 @@ async function buildBundle(input, onProgress) {
       userData,
       advanced: options.advanced,
       dirs: { exePayload, workdirPayload, extraDrives },
+      electron: electronInfo,
+      hostAdb,
     });
     const configText = `${configLines.join('\n')}\n`;
     await fsp.writeFile(path.join(win2macDir, 'config.env'), configText, 'utf8');
@@ -1003,11 +1097,25 @@ async function buildBundle(input, onProgress) {
         extraDrives,
         installerPayload,
         installerWin,
+        indexFile: payloadIndex.length ? 'payload-index.tsv' : '',
       },
       engine: engineInfo,
       registry: registryFiles,
       runtimes,
       userData,
+      electron: electronInfo.isElectron
+        ? {
+            detected: true,
+            packageName: electronInfo.packageName,
+            productName: electronInfo.productName,
+            appId: electronInfo.appId,
+            version: electronInfo.version,
+            asarPath: electronInfo.asarPath ? toPosix(path.relative(app.installPath, electronInfo.asarPath)) : '',
+            nativeModules: electronInfo.nativeModuleCount || 0,
+            flags: options.advanced.electronFlags,
+          }
+        : { detected: false },
+      hostAdb: hostAdb.arm64 || hostAdb.x86_64 ? hostAdb : null,
       advanced: options.advanced,
       icon: { source: iconSource },
       warnings,
@@ -1054,6 +1162,10 @@ async function buildBundle(input, onProgress) {
       },
       runtimes: runtimes.map(({ file, label, kind }) => ({ file, label, kind })),
       registryCount: registryFiles.length,
+      electron: electronInfo.isElectron
+        ? { detected: true, packageName: electronInfo.packageName, flags: options.advanced.electronFlags, nativeModules: electronInfo.nativeModuleCount || 0 }
+        : { detected: false },
+      hostAdb: hostAdb.arm64 || hostAdb.x86_64 ? hostAdb : null,
       warnings,
       createdAt: createdAt.toISOString(),
       iconSource,

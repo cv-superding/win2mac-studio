@@ -208,6 +208,12 @@ async function main() {
       const file = path.join(win2mac, 'payload', ...rel.split('/'));
       assert.equal(await sha256File(file), hash, `manifest hash ${rel}`);
     }
+    const indexLines = fs.readFileSync(path.join(win2mac, 'payload-index.tsv'), 'utf8').trim().split('\n');
+    assert.equal(indexLines[0], 'sha256\tbytes\tpath');
+    assert.equal(indexLines.length, manifest.length + 1);
+    const indexJson = JSON.parse(fs.readFileSync(path.join(win2mac, 'payload-index.json'), 'utf8'));
+    assert.equal(indexJson.files.length, manifest.length);
+    assert.ok(indexJson.files.every((item) => item.path && item.bytes > 0 && item.sha256));
     assert.equal(hashFile(path.join(win2mac, 'payload', ...config.match(/WIN2MAC_EXE_PAYLOAD='([^']+)'/)[1].split('/'))), hashFile(app.exePath));
 
     const zipCheck = await run('python', ['-c', `

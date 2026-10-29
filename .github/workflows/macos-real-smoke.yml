@@ -1,0 +1,56 @@
+name: macOS real Wine smoke
+
+on:
+  push:
+    paths:
+      - 'resources/templates/launcher.sh'
+      - 'resources/templates/mac-check.command'
+      - 'test/ci/macos-real-smoke.sh'
+      - '.github/workflows/macos-real-smoke.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: macOS ${{ matrix.os }} + Gcenx Wine
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install Rosetta 2
+        run: |
+          if ! arch -x86_64 true 2>/dev/null; then
+            sudo softwareupdate --install-rosetta --agree-to-license
+          fi
+
+      - name: Download Gcenx Wine 11.18
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wine-download" "$RUNNER_TEMP/wine-11.18"
+          curl -fL --retry 3 --retry-delay 2 \
+            -o "$RUNNER_TEMP/wine-download/wine.tar.xz" \
+            "https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.18/wine-staging-11.18-osx64.tar.xz"
+          echo "b63704b91af269bc026a87f12bd297c4a50caaf570c322e600b6621ef918f127  $RUNNER_TEMP/wine-download/wine.tar.xz" | shasum -a 256 -c -
+          tar -xf "$RUNNER_TEMP/wine-download/wine.tar.xz" -C "$RUNNER_TEMP/wine-11.18"
+
+      - name: Run real-macOS smoke
+        env:
+          WIN2MAC_CI_WINE_ROOT: ${{ runner.temp }}/wine-11.18
+        run: bash test/ci/macos-real-smoke.sh
+
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-smoke-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/win2mac-smoke/logs
+            ${{ runner.temp }}/win2mac-smoke/diag
+            ${{ runner.temp }}/win2mac-smoke/check
+            ${{ runner.temp }}/win2mac-smoke/*.out
+          if-no-files-found: ignore

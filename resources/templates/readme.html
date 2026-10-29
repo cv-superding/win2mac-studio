@@ -28,6 +28,10 @@
   .note { background:#f4faf6; border:1px solid #cfe8d9; color:#175d40; border-radius:12px; padding:14px 16px; }
   .warn { background:#fff8e8; border:1px solid #f0dca8; color:#7a5206; border-radius:12px; padding:14px 16px; }
   .danger { background:#fff4f2; border:1px solid #f3c9c2; color:#8f1d13; border-radius:12px; padding:14px 16px; }
+  .first-open { border-color:#f0dca8; background:#fffaf0; }
+  .first-open h2 { color:#7a5206; }
+  .copy { margin-top:10px; border:0; border-radius:999px; background:var(--accent); color:#fff; font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; padding:9px 16px; cursor:pointer; }
+  .copy:active { transform:translateY(1px); }
   .reasons { display:flex; flex-direction:column; gap:8px; }
   .reason { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
   .reason b { font-size:14px; }
@@ -48,6 +52,30 @@
   <p class="sub">Windows {{APP_VERSION}} · {{PUBLISHER}}</p>
   <span class="badge">兼容性 {{GRADE}} · {{GRADE_LABEL}}</span>
 
+  <section class="first-open">
+    <h2>第一次打开（重要）</h2>
+    <p><strong>这个包没有 Apple Developer ID 签名与公证，macOS 会拦截未签名的 .command 和 .app。这是系统安全策略，不代表文件有问题。</strong></p>
+    <p>只需要放行一次。任选一种：</p>
+    <h3>方法 A：图形界面</h3>
+    <ol>
+      <li>双击 <code>Open-Win2Mac-App.command</code>，在提示框点“完成”。</li>
+      <li>打开 <strong>系统设置 → 隐私与安全性</strong>，向下滚动到“安全性”，点“仍要打开”，输入 Mac 密码。</li>
+      <li>再次双击 <code>Open-Win2Mac-App.command</code>。它会清除整个文件夹的隔离标记、修复脚本权限并打开应用。</li>
+    </ol>
+    <p class="muted">macOS 14 及更早版本也可以右键该 .command → 打开；macOS 15/26 上右键打开通常不可用，请用“仍要打开”。</p>
+    <h3>方法 B：终端命令（最可靠）</h3>
+    <ol>
+      <li>打开“终端”（启动台搜索“终端”）。</li>
+      <li>输入 <code>cd </code>（后面有一个空格），把整个解压后的文件夹拖进终端窗口，回车。</li>
+      <li>运行下面三行命令：</li>
+    </ol>
+    <pre>xattr -dr com.apple.quarantine .
+chmod +x *.command
+open *.app</pre>
+    <button class="copy" type="button" onclick="navigator.clipboard&amp;&amp;navigator.clipboard.writeText('xattr -dr com.apple.quarantine .\nchmod +x *.command\nopen *.app').then(()=>{this.textContent='已复制'}).catch(()=>{})">复制这三行命令</button>
+    <p class="muted">如果 .app 仍被拦截，回到“系统设置 → 隐私与安全性”点“仍要打开”。这些命令只清除本文件夹的隔离标记，不会关闭系统安全功能。</p>
+  </section>
+
   <div class="grid">
     <div class="stat"><b>{{FILE_COUNT}}</b><span>原样打包文件</span></div>
     <div class="stat"><b>{{PAYLOAD_SIZE}}</b><span>应用文件体积</span></div>
@@ -59,20 +87,11 @@
     <ol>
       <li>把 ZIP 完整解压到“应用程序”或任意本地文件夹，不要直接在压缩包里运行。</li>
       <li><strong>请在 macOS 上用访达解压 ZIP。</strong>Windows 资源管理器解压会丢失 .app 与 .command 的执行权限。</li>
-      <li>双击 <code>Open-Win2Mac-App.command</code>。它会移除隔离标记、修复执行权限并打开 .app。</li>
-      <li>如果 macOS 提示“无法验证开发者”：macOS 14 及更早版本可右键该 .command → 打开；<strong>macOS 15/26 请到“系统设置 → 隐私与安全性”点“仍要打开”</strong>。</li>
+      <li>按上方“第一次打开”放行一次；之后双击 <code>Open-Win2Mac-App.command</code> 即可启动。</li>
       <li>首次启动会初始化 Wine 环境，可能还需要下载运行时，请保持网络连接并耐心等待。</li>
     </ol>
     <div class="note">首次启动可能需要 30 秒到数分钟。如果安装包未内置引擎，首次启动还需下载 Wine；进度与错误会写入 <code>~/Library/Logs/Win2Mac/{{APP_ID}}.log</code>。</div>
-    <pre>如果 .command 无法双击，或你曾在 Windows 上解压过 ZIP：
-
-chmod +x Open-Win2Mac-App.command
-bash Open-Win2Mac-App.command
-
-或手动：
-xattr -dr com.apple.quarantine "{{APP_PATH}}"
-chmod +x "{{APP_PATH}}/Contents/MacOS/launcher"
-open "{{APP_PATH}}"</pre>
+    <div class="warn">如果曾在 Windows 上解压过 ZIP，.app 与 .command 会失去执行权限。请在 Mac 上重新用访达解压，或先运行 <code>chmod +x *.command</code> 和 <code>chmod +x "{{APP_PATH}}/Contents/MacOS/launcher"</code>。</div>
   </section>
 
   {{INSTALLER_BLOCK}}
@@ -87,8 +106,9 @@ open "{{APP_PATH}}"</pre>
     <h3>已知限制</h3>
     <ul>
       <li>Wine 不能加载 Windows 内核驱动（.sys），也不支持大多数反作弊服务。</li>
-      <li>依赖 DRM/激活服务、Windows 服务、IE 插件或 UWP/MSIX 的程序通常无法运行。</li>
-      <li>不保证 100% 功能与性能；游戏建议使用 Apple GPTK 或 CrossOver 的 D3DMetal。媒体播放应用可能需要在 Mac 上安装 GStreamer。</li>
+      <li>Wine 无法把 USB 设备直通给 Windows 程序；依赖 ADB/手机投屏、加密狗、串口设备的应用通常不能正常工作。若打包时检测到应用自带 macOS adb，启动器会尝试本机 ADB 桥接（实验性）；失败请改用虚拟机或官方 Mac 版。</li>
+      <li>依赖 DRM/激活服务、Windows 服务、IE 插件或 UWP/MSIX 的程序通常无法运行；依赖机器码的授权在 Wine 中可能失效。</li>
+      <li>不保证 100% 功能与性能；游戏建议使用 Apple GPTK 或 CrossOver 的 D3DMetal。媒体播放应用可能需要在 Mac 上安装 GStreamer（缺失通常只影响音视频播放）。</li>
       <li>此安装包未使用 Apple Developer ID 签名/公证，因此需要上面的手动打开步骤。</li>
     </ul>
   </section>
@@ -116,10 +136,11 @@ shasum -a 256 -c ../manifest.sha256</pre>
 
   <section>
     <h2>一键诊断（推荐先运行）</h2>
-    <p>双击 <code>Start-Mac-Validation.command</code>。它会检查系统、Rosetta、Gatekeeper、引擎、完整性，并尝试启动 .app；结束后在桌面生成：</p>
+    <p>双击 <code>Start-Mac-Validation.command</code>。它会检查系统、Rosetta、Gatekeeper、引擎、文件清单与完整性，并用详细日志模式启动 .app；结束后在桌面生成：</p>
     <pre>~/Desktop/Win2Mac-验证日志-日期-时间.log
 ~/Desktop/Win2Mac-诊断-日期-时间.zip</pre>
-    <p>把桌面上的 <b>Win2Mac-诊断-*.zip</b> 发回给打包者即可。诊断包包含完整日志、系统信息和该应用的 Wine 日志，不包含应用文件本身。</p>
+    <p>诊断包现在包含 <code>Report.md</code>、<code>Report.json</code>、<code>Missing.txt</code>、<code>Repair.md</code>、<code>System/</code>、<code>Prefix/</code> 和 <code>Logs/</code>；其中 <code>Missing.txt</code> 会逐条列出缺失或大小不一致的文件，<code>Report.json</code> 可直接交给其他诊断工具/agent。</p>
+    <p>如果启动器自身失败，它也会自动在桌面生成 <code>Win2Mac-失败诊断-*.zip</code>，并弹窗显示路径。把任意一个诊断 ZIP 发回给打包者即可。</p>
     <div class="warn">日志可能包含本机用户名和安装路径；只发送给可信的打包者，不要公开上传。</div>
   </section>
 
@@ -127,7 +148,9 @@ shasum -a 256 -c ../manifest.sha256</pre>
     <h2>排障</h2>
     <h3>应用闪退或没有窗口</h3>
     <ol>
-      <li>打开日志：<code>~/Library/Logs/Win2Mac/{{APP_ID}}.log</code>，查看最后的错误。</li>
+      <li>打开日志：<code>~/Library/Logs/Win2Mac/{{APP_ID}}.log</code>，同时检查 <code>launcher-*.log</code> 和 <code>state-{{APP_ID}}.env</code>。每个阶段都有时间戳和返回码。</li>
+      <li>需要更详细的 Wine 输出时，在终端运行：<br><code>WIN2MAC_DEBUG=1 "这里替换为YourApp.app/Contents/MacOS/launcher" --debug</code></li>
+      <li>如果诊断包里的 <code>Missing.txt</code> 非空，先用 Finder 重新解压原始 ZIP；仍缺失说明传输/解压不完整，请让打包者重新发送或重建。</li>
       <li>双击 <code>Reset-Runtime.command</code> 重置运行环境后重试（会删除该应用的 Wine 数据）。</li>
       <li>在 Mac 上安装 CrossOver 24+ 或 Apple Game Porting Toolkit 2，然后重新打开；启动器会自动优先复用它们。如果安装包被设为“仅复用引擎”，必须这样做。</li>
       <li>仍无法运行时，可考虑 UTM/Parallels 运行 Windows 虚拟机，或寻找官方 Mac 版。</li>

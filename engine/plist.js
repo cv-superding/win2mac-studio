@@ -60,6 +60,7 @@ function buildInfoPlist(options) {
     CFBundleInfoDictionaryVersion: '6.0',
     CFBundleName: name,
     CFBundlePackageType: 'APPL',
+    CFBundleSupportedPlatforms: ['MacOSX'],
     CFBundleShortVersionString: sanitizeShortVersion(shortVersion || version),
     CFBundleVersion: sanitizeBundleVersion(bundleVersion || version),
     LSApplicationCategoryType: category,

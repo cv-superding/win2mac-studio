@@ -176,6 +176,27 @@ test('Windows service dependencies downgrade to C instead of blocking', async ()
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('USB/ADB dependencies block Wine conversion and recommend a VM', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'win2mac-usb-'));
+  const exe = path.join(dir, 'app.exe');
+  fs.writeFileSync(exe, makePE());
+  fs.writeFileSync(path.join(dir, 'adb.exe'), 'x');
+  const app = {
+    name: 'Device Tool', publisher: 'Test', version: '1.0', installPath: dir, exePath: exe,
+    workingDirectory: dir, registryKeys: [], source: 'test', launchArgs: '',
+  };
+  const analysis = await analyzeApp(app, { services: [] });
+  assert.equal(analysis.dependencies.usb, true);
+  assert.equal(analysis.blocked, true);
+  assert.equal(analysis.grade, 'D');
+  assert.equal(analysis.recommendedEngine, 'vm');
+  assert.ok(analysis.reasons.some((reason) => reason.code === 'usb-device' && reason.severity === 'block'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('shortcut matching never accepts unrelated system shortcuts', () => {
   const app = {
     name: 'Docker Desktop',
@@ -370,6 +391,6 @@ test('macOS shell templates brace variables before Unicode text', () => {
   const path = require('node:path');
   for (const name of ['launcher.sh', 'mac-check.command', 'open-me.command', 'verify-integrity.command', 'reset-runtime.command']) {
     const source = fs.readFileSync(path.join(__dirname, '..', 'resources', 'templates', name), 'utf8');
-    assert.equal(/\$[A-Za-z_][A-Za-z0-9_]*(?=[^ -])/.test(source), false, `${name} has an unbraced variable before Unicode text`);
+    assert.equal(/\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-])/.test(source), false, `${name} has an unbraced variable before Unicode text`);
   }
 });

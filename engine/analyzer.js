@@ -16,6 +16,8 @@ const ANTI_CHEAT_PATTERN =
 
 const DRM_PATTERN = /(denuvo|securom|safedisc|starforce|drm|activation64)/i;
 
+const USB_PATTERN = /(^|[\\/])(adb\.exe|scrcpy[^\\/]*\.exe|libusb[^\\/]*\.dll)$/i;
+
 function importMatches(imports, patterns) {
   const names = Array.isArray(imports) ? imports : [...imports];
   return patterns.some((pattern) => {
@@ -36,6 +38,7 @@ async function scanDirectoryRisks(installPath, options = {}) {
     antiCheatHits: [],
     kernelDrivers: [],
     drmHits: [],
+    usbHits: [],
     warnings: [],
   };
   if (!installPath || options.scanDirectory === false) return result;
@@ -48,10 +51,12 @@ async function scanDirectoryRisks(installPath, options = {}) {
     const rel = path.relative(installPath, file.path);
     if (ANTI_CHEAT_PATTERN.test(rel)) result.antiCheatHits.push(rel);
     if (DRM_PATTERN.test(rel)) result.drmHits.push(rel);
+    if (USB_PATTERN.test(rel)) result.usbHits.push(rel);
     if (/\.sys$/i.test(rel)) result.kernelDrivers.push(rel);
   }
   result.antiCheatHits = [...new Set(result.antiCheatHits)].slice(0, 12);
   result.drmHits = [...new Set(result.drmHits)].slice(0, 12);
+  result.usbHits = [...new Set(result.usbHits)].slice(0, 12);
   result.kernelDrivers = [...new Set(result.kernelDrivers)].slice(0, 12);
   return result;
 }
@@ -79,6 +84,7 @@ async function analyzeApp(app, options = {}) {
     kernel: false,
     antiCheat: false,
     drm: false,
+    usb: false,
   };
   let score = 97;
   let blocked = false;
@@ -295,6 +301,19 @@ async function analyzeApp(app, options = {}) {
     );
   }
 
+  if (dirRisks.usbHits.length) {
+    dependencies.usb = true;
+    score = Math.min(score, 30);
+    blocked = true;
+    addReason(
+      reasons,
+      'block',
+      'usb-device',
+      '依赖 USB / ADB 设备访问',
+      `发现：${dirRisks.usbHits.slice(0, 3).join('、')}。Wine 在 macOS 上不能把 USB 设备直通给 Windows 程序，ADB 调试、手机投屏、加密狗、串口设备等通常无法工作。建议改用 UTM/Parallels 虚拟机，或寻找该软件的官方 Mac 版。`,
+    );
+  }
+
   const services = matchServices(app, options.services || app.services || []);
   if (services.length) {
     score = Math.min(score, 58);
@@ -361,6 +380,7 @@ async function analyzeApp(app, options = {}) {
       antiCheatHits: dirRisks.antiCheatHits,
       kernelDrivers: dirRisks.kernelDrivers,
       drmHits: dirRisks.drmHits,
+      usbHits: dirRisks.usbHits,
       warnings: dirRisks.warnings.slice(0, 20),
     },
     services: services.map((s) => ({

@@ -61,6 +61,8 @@ build options:
   --recipe <file>        应用 .win2mac.json 移植配方（CLI 参数优先）
   --registry <key>       额外导出注册表键（可重复）
   --args "<args>"        主程序启动参数
+  --electron-flags "<args>" 覆盖 Electron 兼容启动参数
+  --no-electron-compat   关闭 Electron 自动兼容参数
   --workdir <dir>        工作目录
   --user-data            包含用户数据
   --no-runtimes          不下载 VC++/Wine Mono
@@ -166,6 +168,8 @@ async function main() {
         advanced: {
           ...(recipeOptions?.advanced || {}),
           ...(args.args !== undefined ? { launchArgs: args.args } : {}),
+          ...(args['electron-flags'] !== undefined ? { electronFlags: args['electron-flags'] } : {}),
+          ...(args['no-electron-compat'] ? { electronCompat: false } : {}),
         },
         proxy: args.proxy || '',
       },

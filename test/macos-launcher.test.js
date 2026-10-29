@@ -103,7 +103,10 @@ exit 0
 printf 'OPEN %s\\n' "$*" >> "$STUB_OPEN_LOG"
 exit 0
 `,
-    xattr: '#!/bin/bash\nexit 0\n',
+    xattr: `#!/bin/bash
+printf 'XATTR %s\\n' "$*" >> "$STUB_LOG"
+exit 0
+`,
     codesign: '#!/bin/bash\nexit 0\n',
     caffeinate: `#!/bin/bash
 printf 'CAFFEINATE\\n' >> "$STUB_LOG"
@@ -113,6 +116,9 @@ exec "$@"
     wineserver: `#!/bin/bash
 printf 'WINESERVER %s\\n' "$*" >> "$STUB_LOG"
 exit 0
+`,
+    nc: `#!/bin/bash
+exit 1
 `,
     wine: `#!/bin/bash
 printf 'WINE %s\\n' "$*" >> "$STUB_LOG"
@@ -124,6 +130,9 @@ case "$1" in
     ;;
   *)
     printf 'ENV:%s\\n' "\${WIN2MAC_TEST_ENV:-}" >> "$STUB_LOG"
+    printf 'ADB:%s\\n' "\${ADB_SERVER_SOCKET:-}" >> "$STUB_LOG"
+    printf 'ADBADDR:%s\\n' "\${ANDROID_ADB_SERVER_ADDRESS:-}" >> "$STUB_LOG"
+    printf 'ADBPORT:%s\\n' "\${ANDROID_ADB_SERVER_PORT:-}" >> "$STUB_LOG"
     printf 'LAUNCHED:%s\\n' "$*" >> "$STUB_LOG"
     touch "$WINEPREFIX/launched.marker"
     ;;
@@ -149,7 +158,7 @@ function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-async function createFixture(root) {
+async function createFixture(root, options = {}) {
   const bundle = path.join(root, 'Fixture App.app');
   const contents = path.join(bundle, 'Contents');
   const macos = path.join(contents, 'MacOS');
@@ -168,6 +177,12 @@ async function createFixture(root) {
     `${sha256(dataContent)}  C/App/data.ini`,
   ].join('\n') + '\n';
   await fsp.writeFile(path.join(win2mac, 'manifest.sha256'), manifest, 'utf8');
+  const indexLines = [
+    'sha256\tbytes\tpath',
+    `${sha256(exeContent)}\t${exeContent.length}\tC/App/App.exe`,
+    `${sha256(dataContent)}\t${dataContent.length}\tC/App/data.ini`,
+  ].join('\n') + '\n';
+  await fsp.writeFile(path.join(win2mac, 'payload-index.tsv'), indexLines, 'utf8');
   const config = [
     `WIN2MAC_APP_NAME=${shellQuote('Mac Sim App')}`,
     `WIN2MAC_APP_ID=${shellQuote('sim-app')}`,
@@ -195,6 +210,7 @@ async function createFixture(root) {
     `WIN2MAC_RUNTIME_COUNT=${shellQuote('0')}`,
     `WIN2MAC_USERDATA_COUNT=${shellQuote('0')}`,
     `WIN2MAC_EXTRA_DRIVES=${shellQuote('')}`,
+    ...(options.extraConfig || []),
     '',
   ].join('\n');
   await fsp.writeFile(path.join(win2mac, 'config.env'), config, 'utf8');
@@ -255,13 +271,15 @@ test('macOS launcher runs on Darwin-shaped hosts (simulated on Windows)', { skip
     const logDir = path.join(root, 'logs');
     const prefix = path.join(root, 'prefixes', 'sim-app');
 
-    const first = await runBash([toShell(fixture.launcher)], { env, cwd: root });
+    const first = await runBash([toShell(fixture.launcher), '--debug'], { env, cwd: root });
     assert.equal(first.code, 0, `first launch failed:\n${first.stdout}\n${first.stderr}`);
     const stubFirst = await fsp.readFile(stubLog, 'utf8');
     assert.match(stubFirst, /WINE wineboot -u/);
     assert.match(stubFirst, /ENV:ok/);
     assert.match(stubFirst, /CAFFEINATE/);
     assert.match(stubFirst, /LAUNCHED:.*--hello hello world/);
+    assert.match(stubFirst, /XATTR -d com\.apple\.quarantine/);
+    assert.match(stubFirst, /XATTR -d com\.apple\.quarantine .*Start-Mac-Validation\.command/);
     assert.ok(fs.existsSync(path.join(prefix, '.win2mac', 'initialized')));
     assert.ok(fs.existsSync(path.join(prefix, '.win2mac', 'payload-version')));
     assert.ok(fs.existsSync(path.join(prefix, 'launched.marker')));
@@ -270,6 +288,15 @@ test('macOS launcher runs on Darwin-shaped hosts (simulated on Windows)', { skip
     assert.match(appLog, /Using engine: wine/);
     assert.match(appLog, /Launching:/);
     assert.match(appLog, /Copying payload drive C/);
+    assert.match(appLog, /winDebug=fixme-all/);
+    assert.match(appLog, /STAGE payload-check/);
+    assert.match(appLog, /payload check: checked=2 missing=0 sizeMismatch=0/);
+    assert.match(appLog, /STAGE engine/);
+    assert.match(appLog, /STAGE launch/);
+    assert.match(appLog, /app exited status=0/);
+    const state = await fsp.readFile(path.join(logDir, 'state-sim-app.env'), 'utf8');
+    assert.match(state, /STATUS=exited/);
+    assert.match(state, /EXIT_CODE=0/);
 
     const second = await runBash([toShell(fixture.launcher)], { env, cwd: root });
     assert.equal(second.code, 0, `second launch failed:\n${second.stdout}\n${second.stderr}`);
@@ -285,6 +312,8 @@ test('macOS launcher runs on Darwin-shaped hosts (simulated on Windows)', { skip
     assert.equal(open.code, 0, `open helper failed:\n${open.stdout}\n${open.stderr}`);
     const openLog = await fsp.readFile(path.join(root, 'open.log'), 'utf8');
     assert.match(openLog, /Fixture App\.app/);
+    const openStub = await fsp.readFile(stubLog, 'utf8');
+    assert.match(openStub, /XATTR -dr com\.apple\.quarantine/);
 
     const reset = await runBash([toShell(path.join(root, 'Reset-Runtime.command'))], { env, cwd: root });
     assert.equal(reset.code, 1);
@@ -357,7 +386,16 @@ test('macOS validation collector creates an obvious log and support folder', { s
     assert.ok(fs.existsSync(path.join(support, 'README.txt')));
     assert.ok(fs.existsSync(path.join(support, 'App', 'config.env')));
     assert.ok(fs.existsSync(path.join(support, 'App', 'manifest.sha256')));
+    assert.ok(fs.existsSync(path.join(support, 'App', 'payload-index.tsv')));
     assert.ok(fs.existsSync(path.join(support, 'System', 'sw_vers.txt')));
+    assert.ok(fs.existsSync(path.join(support, 'System', 'Engine.txt')));
+    assert.ok(fs.existsSync(path.join(support, 'Prefix', 'Prefix.txt')));
+    assert.ok(fs.existsSync(path.join(support, 'Missing.txt')));
+    assert.ok(fs.existsSync(path.join(support, 'Repair.md')));
+    const reportJson = JSON.parse(await fsp.readFile(path.join(support, 'Report.json'), 'utf8'));
+    assert.equal(reportJson.payload.missingCount, 0);
+    assert.equal(reportJson.payload.manifestCount, 2);
+    assert.equal(reportJson.checks.fail, 0);
     assert.match(await fsp.readFile(path.join(support, 'README.txt'), 'utf8'), /隐私提示/);
     passed = true;
   } finally {
@@ -394,6 +432,7 @@ test('macOS validation collector survives missing app and failed integrity', { s
 
     const fixture = await createFixture(root);
     await fsp.writeFile(path.join(fixture.payload, 'App.exe'), 'corrupted payload');
+    await fsp.rm(path.join(fixture.payload, 'data.ini'));
     const corruptOut = path.join(root, 'corrupt-out');
     const corruptEnv = baseEnv(root, shims, {
       WIN2MAC_CHECK_APP: toShell(fixture.bundle),
@@ -412,9 +451,194 @@ test('macOS validation collector survives missing app and failed integrity', { s
     assert.match(corruptReport, /\[FAIL\] 完整性校验/);
     assert.ok(fs.existsSync(path.join(corruptOut, supportName, 'Integrity.log')));
     assert.match(await fsp.readFile(path.join(corruptOut, supportName, 'Integrity.log'), 'utf8'), /FAILED/);
+    const corruptJson = JSON.parse(await fsp.readFile(path.join(corruptOut, supportName, 'Report.json'), 'utf8'));
+    assert.ok(corruptJson.checks.fail > 0);
+    assert.equal(corruptJson.payload.missingCount, 1);
+    assert.ok(corruptJson.payload.issues.some((line) => /data\.ini/.test(line)));
+    assert.ok(fs.existsSync(path.join(corruptOut, supportName, 'Repair.md')));
     passed = true;
   } finally {
     if (passed) await fsp.rm(root, { recursive: true, force: true });
     else console.error(`macOS validation failure-path artifacts kept at ${root}`);
+  }
+});
+
+test('macOS readme documents Gatekeeper recovery for unsigned builds', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'resources', 'templates', 'readme.html'), 'utf8');
+  assert.match(html, /第一次打开（重要）/);
+  assert.match(html, /xattr -dr com\.apple\.quarantine/);
+  assert.match(html, /chmod \+x \*\.command/);
+  assert.match(html, /隐私与安全性/);
+  assert.match(html, /仍要打开/);
+});
+
+test('macOS launcher applies Electron compatibility flags without duplicates', { skip: BASH ? false : 'bash not available' }, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-macos-electron-'));
+  let passed = false;
+  try {
+    const fixture = await createFixture(root, {
+      extraConfig: [
+        `WIN2MAC_ELECTRON=${shellQuote('1')}`,
+        `WIN2MAC_ELECTRON_COMPAT=${shellQuote('1')}`,
+        `WIN2MAC_ELECTRON_ARG_COUNT=${shellQuote('4')}`,
+        `WIN2MAC_ELECTRON_ARG_1=${shellQuote('--hello')}`,
+        `WIN2MAC_ELECTRON_ARG_2=${shellQuote('--no-sandbox')}`,
+        `WIN2MAC_ELECTRON_ARG_3=${shellQuote('--disable-gpu')}`,
+        `WIN2MAC_ELECTRON_ARG_4=${shellQuote('--in-process-gpu')}`,
+      ],
+    });
+    const shims = path.join(root, 'shims');
+    await createShims(shims);
+    const env = baseEnv(root, shims);
+    const result = await runBash([toShell(fixture.launcher)], { env, cwd: root });
+    assert.equal(result.code, 0, `electron launch failed:\n${result.stdout}\n${result.stderr}`);
+    const stub = await fsp.readFile(path.join(root, 'stub.log'), 'utf8');
+    const launched = stub.split('\n').find((line) => line.startsWith('LAUNCHED:')) || '';
+    assert.match(launched, /--no-sandbox/);
+    assert.match(launched, /--disable-gpu/);
+    assert.match(launched, /--in-process-gpu/);
+    assert.equal((launched.match(/--hello/g) || []).length, 1, 'existing app args must not be duplicated');
+    assert.equal((launched.match(/--no-sandbox/g) || []).length, 1, 'electron flags must not be duplicated');
+    const appLog = await fsp.readFile(path.join(root, 'logs', 'sim-app.log'), 'utf8');
+    assert.match(appLog, /Electron compatibility flags: --no-sandbox --disable-gpu --in-process-gpu/);
+    passed = true;
+  } finally {
+    if (passed) await fsp.rm(root, { recursive: true, force: true });
+    else console.error(`macOS Electron flag artifacts kept at ${root}`);
+  }
+});
+
+test('macOS launcher detects Electron at runtime and honors opt-out', { skip: BASH ? false : 'bash not available' }, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-macos-electron-runtime-'));
+  let passed = false;
+  try {
+    const fixture = await createFixture(root);
+    await fsp.mkdir(path.join(fixture.payload, 'resources'), { recursive: true });
+    await fsp.writeFile(path.join(fixture.payload, 'resources', 'app.asar'), 'fake asar');
+    const shims = path.join(root, 'shims');
+    await createShims(shims);
+
+    const env = baseEnv(root, shims);
+    const detected = await runBash([toShell(fixture.launcher)], { env, cwd: root });
+    assert.equal(detected.code, 0, `runtime detection launch failed:\n${detected.stdout}\n${detected.stderr}`);
+    const stub = await fsp.readFile(path.join(root, 'stub.log'), 'utf8');
+    assert.match(stub, /LAUNCHED:.*--no-sandbox/);
+    assert.match(stub, /LAUNCHED:.*--disable-gpu/);
+    assert.match(stub, /LAUNCHED:.*--in-process-gpu/);
+
+    const optOutRoot = path.join(root, 'opt-out');
+    const optOutFixture = await createFixture(optOutRoot);
+    await fsp.mkdir(path.join(optOutFixture.payload, 'resources'), { recursive: true });
+    await fsp.writeFile(path.join(optOutFixture.payload, 'resources', 'app.asar'), 'fake asar');
+    const optOutShims = path.join(optOutRoot, 'shims');
+    await createShims(optOutShims);
+    const optOutEnv = baseEnv(optOutRoot, optOutShims, {});
+    await fsp.appendFile(path.join(optOutFixture.win2mac, 'config.env'), `WIN2MAC_ELECTRON_COMPAT=${shellQuote('0')}\n`, 'utf8');
+    const optedOut = await runBash([toShell(optOutFixture.launcher)], { env: optOutEnv, cwd: optOutRoot });
+    assert.equal(optedOut.code, 0, `opt-out launch failed:\n${optedOut.stdout}\n${optedOut.stderr}`);
+    const optOutStub = await fsp.readFile(path.join(optOutRoot, 'stub.log'), 'utf8');
+    const optOutLaunch = optOutStub.split('\n').find((line) => line.startsWith('LAUNCHED:')) || '';
+    assert.doesNotMatch(optOutLaunch, /--no-sandbox|--in-process-gpu/);
+    passed = true;
+  } finally {
+    if (passed) await fsp.rm(root, { recursive: true, force: true });
+    else console.error(`macOS Electron runtime artifacts kept at ${root}`);
+  }
+});
+
+test('macOS launcher merges payload Windows profile into the current Wine user', { skip: BASH ? false : 'bash not available' }, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-macos-profile-'));
+  let passed = false;
+  try {
+    const fixture = await createFixture(root);
+    const oldProfile = path.join(path.dirname(fixture.payload), 'Users', 'OldUser', 'AppData');
+    await fsp.mkdir(path.join(oldProfile, 'Roaming', 'baokeai'), { recursive: true });
+    await fsp.writeFile(path.join(oldProfile, 'Roaming', 'baokeai', 'config.json'), '{"license":"kept"}', 'utf8');
+    await fsp.mkdir(path.join(oldProfile, 'Local', 'Programs', 'App'), { recursive: true });
+    await fsp.writeFile(path.join(oldProfile, 'Local', 'Programs', 'App', 'App.exe'), 'duplicate', 'utf8');
+
+    const shims = path.join(root, 'shims');
+    await createShims(shims);
+    const env = baseEnv(root, shims);
+    const result = await runBash([toShell(fixture.launcher)], { env, cwd: root });
+    assert.equal(result.code, 0, `profile merge launch failed:\n${result.stdout}\n${result.stderr}`);
+
+    const currentProfile = path.join(root, 'prefixes', 'sim-app', 'drive_c', 'users', 'tester', 'AppData');
+    const merged = path.join(currentProfile, 'Roaming', 'baokeai', 'config.json');
+    assert.ok(fs.existsSync(merged), 'payload profile should be merged into the current Wine user');
+    assert.match(await fsp.readFile(merged, 'utf8'), /kept/);
+    assert.ok(!fs.existsSync(path.join(currentProfile, 'Local', 'Programs', 'App', 'App.exe')), 'app binaries must not be duplicated');
+    const appLog = await fsp.readFile(path.join(root, 'logs', 'sim-app.log'), 'utf8');
+    assert.match(appLog, /Merging payload user profile OldUser into tester/);
+    passed = true;
+  } finally {
+    if (passed) await fsp.rm(root, { recursive: true, force: true });
+    else console.error(`macOS profile merge artifacts kept at ${root}`);
+  }
+});
+
+test('macOS launcher reports missing payload files with structured diagnostics', { skip: BASH ? false : 'bash not available' }, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-macos-missing-'));
+  let passed = false;
+  try {
+    const fixture = await createFixture(root);
+    await fsp.rm(path.join(fixture.payload, 'data.ini'));
+    const shims = path.join(root, 'shims');
+    await createShims(shims);
+    const diagDir = path.join(root, 'diagnostics');
+    const env = baseEnv(root, shims, {
+      WIN2MAC_DIAGNOSTICS_DIR: toShell(diagDir),
+      WIN2MAC_DIAGNOSTICS_NO_ZIP: '1',
+    });
+    const result = await runBash([toShell(fixture.launcher)], { env, cwd: root });
+    assert.equal(result.code, 1, `missing payload should fail:\n${result.stdout}\n${result.stderr}`);
+
+    const entries = await fsp.readdir(diagDir);
+    const diagName = entries.find((name) => name.startsWith('Win2Mac-失败诊断-sim-app-'));
+    assert.ok(diagName, `diagnostics folder missing; stdout:\n${result.stdout}`);
+    const diag = path.join(diagDir, diagName);
+    const missing = await fsp.readFile(path.join(diag, 'Missing.txt'), 'utf8');
+    assert.match(missing, /MISSING\tC\/App\/data\.ini/);
+    const report = JSON.parse(await fsp.readFile(path.join(diag, 'Report.json'), 'utf8'));
+    assert.equal(report.payload.missingCount, 1);
+    assert.ok(report.payload.issues.some((line) => /C\/App\/data\.ini/.test(line)));
+    assert.ok(fs.existsSync(path.join(diag, 'Report.md')));
+    assert.ok(fs.existsSync(path.join(diag, 'Logs', 'sim-app.log')));
+    assert.ok(fs.existsSync(path.join(diag, 'App', 'manifest.sha256')));
+    const stub = await fsp.readFile(path.join(root, 'stub.log'), 'utf8');
+    assert.doesNotMatch(stub, /wineboot/, 'must fail before starting Wine');
+    passed = true;
+  } finally {
+    if (passed) await fsp.rm(root, { recursive: true, force: true });
+    else console.error(`macOS missing payload artifacts kept at ${root}`);
+  }
+});
+
+test('macOS launcher bridges bundled host adb through localhost', { skip: BASH ? false : 'bash not available' }, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-macos-adb-'));
+  let passed = false;
+  try {
+    const fixture = await createFixture(root, {
+      extraConfig: [`WIN2MAC_HOST_ADB_ARM=${shellQuote('C/App/adb-host')}`],
+    });
+    await writeExecutable(
+      path.join(fixture.payload, 'adb-host'),
+      '#!/bin/bash\nprintf "HOSTADB %s\\n" "$*" >> "$STUB_LOG"\nexit 0\n',
+    );
+
+    const shims = path.join(root, 'shims');
+    await createShims(shims);
+    const result = await runBash([toShell(fixture.launcher)], { env: baseEnv(root, shims), cwd: root });
+    assert.equal(result.code, 0, `adb bridge launch failed:\n${result.stdout}\n${result.stderr}`);
+
+    const stubLog = await fsp.readFile(path.join(root, 'stub.log'), 'utf8');
+    assert.match(stubLog, /HOSTADB start-server/);
+    assert.match(stubLog, /ADB:tcp:127\.0\.0\.1:5037/);
+    assert.match(stubLog, /ADBADDR:127\.0\.0\.1/);
+    assert.match(stubLog, /ADBPORT:5037/);
+    passed = true;
+  } finally {
+    if (passed) await fsp.rm(root, { recursive: true, force: true });
+    else console.error(`macOS adb bridge artifacts kept at ${root}`);
   }
 });

@@ -34,8 +34,12 @@
     <h2>怎么用</h2>
     <div class="step"><span class="num">1</span><div><b>解压转换产物</b><p>用 Finder 解压 Win2Mac 生成的 ZIP。不要用 Windows 资源管理器解压。</p></div></div>
     <div class="step"><span class="num">2</span><div><b>把本工具放到 .app 旁边</b><p>如果工具文件夹和 .app 不在同一层，直接把 .app 拖到 <code>Start-Mac-Validation.command</code> 上也可以。</p></div></div>
-    <div class="step"><span class="num">3</span><div><b>双击开始验证</b><p>首次打开若被 Gatekeeper 拦截，右键 → 打开；或在终端运行 <code>bash Start-Mac-Validation.command</code>。</p></div></div>
+    <div class="step"><span class="num">3</span><div><b>双击开始验证</b><p>首次打开若被 Gatekeeper 拦截，请到“系统设置 → 隐私与安全性”点“仍要打开”；macOS 14 及更早也可右键 → 打开。</p></div></div>
     <div class="step"><span class="num">4</span><div><b>把桌面诊断包发回</b><p>验证结束后 Finder 会弹出诊断 ZIP。日志全文也在桌面。</p></div></div>
+  </div>
+
+  <div class="warn">
+    <b>macOS 15/26：</b>右键 → 打开通常已不可用。双击被拦截后，打开“系统设置 → 隐私与安全性”，在“安全性”下方点“仍要打开”，再双击本工具。也可以在终端进入本文件夹后运行 <code>xattr -dr com.apple.quarantine .</code> 和 <code>chmod +x *.command</code>。
   </div>
 
   <h2>日志和诊断包在哪</h2>

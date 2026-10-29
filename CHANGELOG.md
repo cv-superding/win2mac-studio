@@ -2,15 +2,28 @@
 
 ## 0.4.1 — 2026-10-28
 
+### Added
+
+- **Electron 白屏修复**：识别 `resources/app.asar` 或 Chromium 载荷，自动为 Electron 主程序追加 `--no-sandbox --disable-gpu --in-process-gpu`，并支持去重、高级设置自定义、CLI `--electron-flags` / `--no-electron-compat`。检测到原生 `.node` 模块时自动加入 VC++ 运行库，避免 `better-sqlite3` 等模块加载失败。
+- **注册表与用户配置补全**：除卸载项外，额外导出 App Paths、`HKCU\Software\<厂商>\<产品>`、HKLM/WOW6432Node 等候选键（自动跳过不存在的键）；可选用户数据会按 Electron 包名/产品名补充 AppData。
+- **Wine 用户目录合并**：启动时把 payload 中 `C/Users/<原用户>/AppData` 的设置合并进 Wine 实际用户目录，跳过 `Programs`、`Temp`、缓存等二进制/临时目录，避免覆盖或重复。
+- **ADB 桥接（实验性）**：如果应用自带 macOS 版 `adb`，启动器会在宿主机启动 ADB 服务并设置 `ADB_SERVER_SOCKET=tcp:127.0.0.1:5037`，让 Wine 内的 `adb.exe`/scrcpy 通过 localhost 连接，绕开 Wine 无法直通 USB 的限制；没有 macOS adb 时仍按 D 级提示使用虚拟机。
+- **失败自动诊断**：启动器从配置加载前就开始写日志，按阶段记录时间戳/返回码；失败时自动在桌面生成 `Win2Mac-失败诊断-*.zip`，内含 `Report.md` / `Report.json` / `Missing.txt` / `Repair.md`、系统/引擎/前缀/进程信息和完整日志。支持 `WIN2MAC_DEBUG=1` / `--debug` 打开详细 Wine 日志。
+- **文件清单与缺失检测**：构建时生成 `payload-index.tsv/json`（SHA-256、字节数、路径）；启动前快速检查缺失/大小不一致，不通过就不下载引擎、直接给出可修复清单。
+- **Mac 验证脚本升级**：`Start-Mac-Validation.command` 增加文件清单、缺失报告、引擎/环境/前缀/进程快照、`Report.json`、`Repair.md`，并以 `--debug` 启动应用。
+- **USB/ADB 兼容性检测**：发现 `adb.exe`、`scrcpy`、`libusb` 时直接判 D 并推荐虚拟机——Wine 在 macOS 上无法直通 USB 设备（若存在上述 macOS adb 则尝试桥接）。
+- 注册表候选生成与 Electron 检测均有独立单元测试；启动器新增兼容参数、运行时识别与用户目录合并回归测试。
+
 ### Fixed
 
 - **ZIP/文件夹主程序误识别**：`Uninstall 客源雷达.exe` 这类“卸载器 + 应用名”文件不再参与主程序排序；`uninstall`/`unins*`/`卸载`/安装器/更新器等名称统一硬排除。真实“ZIP 内容直接在根目录”的包也已加入回归测试。
 - **macOS 启动器变量解析**：`${WIN2MAC_APP_NAME}` 等变量在中文标点前统一加花括号，修复 macOS bash 报 `WIN2MAC_APP_NAME…: unbound variable` 导致首次启动直接退出的问题。新增模板变量回归断言。
+- **首次打开引导**：产物 README 置顶 macOS 15/26 的“系统设置 → 隐私与安全性 → 仍要打开”步骤与终端命令；`Open-Win2Mac-App.command` 放行后会清除整个产物目录的隔离标记并修复所有 `.command` 权限，启动器与一键诊断也会顺手修复辅助脚本，避免逐个被 Gatekeeper 拦截。
 - 0.4.1 重新打包安装包、便携版与 MacCheck 工具包；源码与 GitHub Actions 同步更新。
 
 ### Tests
 
-- 单元测试 21/21：新增 Uninstall 主程序排除、扁平 ZIP 根目录、变量/中文标点回归；E2E 与打包后 ZIP 导入 smoke 继续通过。
+- 单元测试 39/39：新增 Electron/ASAR/原生模块/通用 Mach-O adb 检测、ADB 桥接、缺失文件自动诊断、注册表候选、USB 阻断、启动器 Electron 参数、用户目录合并回归；E2E 与打包后 ZIP 导入 smoke 继续通过。
 
 ## 0.4.0 — 2026-10-28
 

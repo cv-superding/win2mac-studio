@@ -15,10 +15,16 @@ if [ -z "$APP" ]; then
 fi
 
 echo "正在修复 macOS 权限与隔离标记：$APP"
-xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+# 整个产物目录一起清，避免 Open/Verify/Reset/Start-Mac-Validation 逐个被 Gatekeeper 拦截。
+xattr -dr com.apple.quarantine "$PWD" 2>/dev/null || true
+chmod +x "$PWD"/*.command 2>/dev/null || true
 chmod +x "$APP/Contents/MacOS/launcher" 2>/dev/null || true
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "正在启动 $APP ..."
-open "$APP"
+if ! open "$APP"; then
+  echo "启动失败：请在“系统设置 → 隐私与安全性”中允许该应用，或重新运行本脚本。"
+  pause_close
+  exit 1
+fi
 sleep 1

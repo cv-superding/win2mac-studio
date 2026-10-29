@@ -7,7 +7,7 @@
 每个转换产物的根目录都有 `Start-Mac-Validation.command`。让朋友：
 
 1. 用 Finder 解压 Win2Mac 生成的 ZIP（不要用 Windows 资源管理器）。
-2. 双击 `Start-Mac-Validation.command`；若被 Gatekeeper 拦截，右键 → 打开，或运行 `bash Start-Mac-Validation.command`。
+2. 双击 `Start-Mac-Validation.command`；若被 Gatekeeper 拦截，打开“系统设置 → 隐私与安全性”点“仍要打开”（macOS 15/26 右键打开通常无效），或在终端运行 `xattr -dr com.apple.quarantine .` 和 `chmod +x *.command` 后重试。
 3. 等验证结束，Finder 会定位到桌面的诊断包。
 4. 把 **`~/Desktop/Win2Mac-诊断-<时间>.zip`** 发回。
 
@@ -30,21 +30,47 @@ shasum -a 256 -c *.zip.sha256   # 若保留了 ZIP 校验文件
 
 ## 2. 首次启动（Gatekeeper）
 
-双击 `Open-Win2Mac-App.command`，或在终端运行：
+双击 `Open-Win2Mac-App.command`。首次会被 Gatekeeper 拦截：打开“系统设置 → 隐私与安全性”点“仍要打开”，放行后脚本会自动清除整个文件夹的隔离标记。
+
+也可以直接在终端进入解压目录运行：
 
 ```bash
-xattr -dr com.apple.quarantine "YourApp.app"
-codesign --force --deep --sign - "YourApp.app"
-open "YourApp.app"
+xattr -dr com.apple.quarantine .
+chmod +x *.command
+open *.app
 ```
 
-首次可能需要在“系统设置 → 隐私与安全性”中允许。检查日志：
+检查日志：
 
 ```bash
 tail -n 100 ~/Library/Logs/Win2Mac/<app-id>.log
 ```
 
+如果启动器失败，它会在桌面自动生成 `Win2Mac-失败诊断-*.zip`。诊断目录里重点看：
+
+- `Report.md` / `Report.json`：结论、阶段、错误、缺失文件（机器可读）。
+- `Missing.txt`：`MISSING` / `SIZE_MISMATCH` 逐文件清单。
+- `System/Engine.txt`、`Prefix/Prefix.txt`、`Processes.txt`：引擎、前缀、残留进程。
+- `Logs/`：主日志、`launcher-*.log` 早期日志、`state.env`。
+
+需要手动复现详细日志时：
+
+```bash
+WIN2MAC_DEBUG=1 "/path/to/YourApp.app/Contents/MacOS/launcher" --debug
+```
+
 预期：`Using engine:`、`Initializing prefix`、`Launching:`，应用窗口出现。
+
+首次启动若包含 VC++ 运行库，会先显示“正在安装 Visual C++ 2015–2022”，通常多等 1–2 分钟。日志出现 `Installing runtime` 属正常。
+
+如果应用是手机/ADB 工具且包内自带 macOS 版 `adb`，日志还会出现：
+
+```text
+ADB bridge: starting .../adb
+ADB bridge: ADB_SERVER_SOCKET=tcp:127.0.0.1:5037
+```
+
+这是实验性的本机 ADB 桥接：连接手机并开启 USB 调试后，Wine 内的 adb/scrcpy 会通过 localhost 访问 macOS 的 ADB 服务。若仍找不到设备，说明桥接不适用于该应用，请改用虚拟机或官方 Mac 版。
 
 ## 3. Apple Silicon / Rosetta
 

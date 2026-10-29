@@ -140,7 +140,7 @@ GitHub 搜索关键词：`wine macos wrapper`、`wineskin`、`whisky wine macos`
 ## 5. 兼容性边界
 
 - Wine 是 API 转译层，不是 CPU 模拟器；x86/x64 Windows PE 在 x86_64 或 Rosetta 下执行。
-- **无法**：加载 Windows 内核驱动（.sys）、运行带内核反作弊的在线游戏、绕过 DRM/激活服务、运行 Windows 服务/UWP/MSIX 程序、部分 WebView2/IE 插件。依赖服务的应用仍可能启动，但相关功能会缺失（分级为 C 并提示）。
+- **无法**：加载 Windows 内核驱动（.sys）、运行带内核反作弊的在线游戏、绕过 DRM/激活服务、运行 Windows 服务/UWP/MSIX 程序、部分 WebView2/IE 插件、把 USB 设备直通给 Windows 程序（ADB/手机投屏/加密狗/串口）。依赖服务的应用仍可能启动，但相关功能会缺失（分级为 C 并提示；USB 依赖直接判 D）。
 - **可能需要调校**：.NET Framework（Wine Mono/winetricks）、DX11/12（D3DMetal）、32 位（WoW64）、多媒体（GStreamer）、字体/DPI、COM 组件。
 - **通常可运行**：普通 x64 Win32 GUI 工具、开源桌面应用、无特殊驱动的便携程序。
 - 这些边界在 UI 的 A/B/C/D 分级、详情原因列表、兼容性页和产出的 README 中一致呈现。
@@ -218,3 +218,46 @@ GitHub 搜索关键词：`wine macos wrapper`、`wineskin`、`whisky wine macos`
 - [Whisky](https://github.com/Whisky-App/Whisky)
 - [Sikarugir](https://github.com/Sikarugir-App/Sikarugir)
 - [Bottles](https://github.com/bottlesdevs/Bottles)
+
+## 12. 真实安装包/应用包解剖（2026-10-28）
+
+本轮直接对照 macOS 应用包、Electron 产物与 Windows 安装器的实际结构，并把差异落到打包器中。
+
+### 12.1 macOS `.app`
+
+- Apple 文档定义的标准结构是 `Foo.app/Contents/{Info.plist,MacOS/,Resources/}`；`Info.plist` 文件名大小写敏感，`Contents/MacOS/` 放主可执行文件，`Contents/Resources/` 放资源。对应本项目 `engine/plist.js` 与 `engine/packager.js` 的目录生成。
+- Apple 文档把 `.app` 描述为“编译后可执行代码”的封装；本项目的 `Contents/MacOS/launcher` 是带 shebang 的 bash 脚本。LaunchServices 实际可以执行它，但它不是 Apple 推荐的二进制主程序，`codesign --deep` 对脚本主程序的签名也有限，因此产物始终需要 Gatekeeper 手动放行。
+- Wineskin/Sikarugir/Whisky 的 wrapper 都把完整 Wine prefix 放在 `.app/Contents/Resources/` 内（如 `drive_c`、`wineskin`/`Wineskin.app`）；本项目选择把 prefix 放在 `~/Library/Application Support/Win2Mac/prefixes/<bundleId>`，`.app` 只带 payload 与启动器，避免每次重建复制数 GB 的 prefix。
+
+### 12.2 Electron for Windows 的真实目录
+
+- 典型安装目录：`App.exe`、`resources/app.asar`、`resources/app.asar.unpacked/`（原生模块）、`locales/`、`chrome_100_percent.pak`、`icudtl.dat`、`ffmpeg.dll`、`vk_swiftshader.dll`、`d3dcompiler_*.dll`；ASAR 官方文档明确 macOS 位于 `Contents/Resources/app.asar`、Windows 位于 `resources/app.asar`。
+- 业务代码在 `app.asar` 里，主进程可能读取 `package.json` 的 `name`/`productName`；原生 `.node` 模块必须与 Electron ABI 匹配，Wine 只能加载 Windows 版 `.node`（不能换成 macOS 版）。
+- 已知 Wine 兼容问题：Electron 在 Wine 中常因 Chromium sandbox/GPU 进程白屏或崩溃。CrossOver 社区与多个案例使用 `--no-sandbox --disable-gpu --in-process-gpu`。本项目 `engine/electron.js` 检测 ASAR/Chromium 载荷，启动器自动追加这些参数，并允许 `WIN2MAC_ELECTRON_COMPAT=0` 关闭。
+- 真实案例（本次测试的“客源雷达”）：Electron x64 + `better-sqlite3` + `@yume-chan/adb` + 自带 `adb.exe`/scrcpy。UI 层可通过上述参数启动，但 ADB/scrcpy 依赖 USB 设备访问，Wine 在 macOS 上无法直通，属于产品边界而非打包 bug。
+
+### 12.3 Windows 安装器留下的足迹
+
+- MSI：在 `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\<ProductCode>` 写入 `DisplayName`、`DisplayVersion`、`Publisher`、`InstallLocation`、`DisplayIcon`、`UninstallString`、`EstimatedSize` 等（Microsoft Learn 的 Uninstall Registry Key 文档逐项列出）。
+- NSIS/Inno Setup：同样写 Uninstall 键，还常写 `HKCU\Software\<厂商>\<产品>`、`HKLM\SOFTWARE\WOW6432Node\<厂商>\<产品>`、`App Paths\<exe>`、文件关联/COM CLSID、`Run` 自启动；配置与授权多在 `%APPDATA%`、`%LOCALAPPDATA%`、`%PROGRAMDATA%`。
+- 因此本项目从“只导出卸载键”扩展为：卸载键 + App Paths + 厂商 HKCU/HKLM 候选键（`engine/registry.js`，缺失键自动跳过），并把 payload 里的 `C/Users/<原用户>/AppData` 合并进 Wine 实际用户目录（跳过 `Programs`/`Temp`/缓存，避免复制二进制）。
+
+### 12.4 USB、驱动与服务
+
+- Wine 的 USB 支持长期停留在实验阶段：WineUSB 自 Wine 6 起只有早期 stub（依赖 libusb），macOS 构建也没有可用的 USB 设备直通；Windows 程序通过 WinUSB/libusb 访问 ADB 设备、加密狗、串口设备时通常直接失败。本项目在 `engine/analyzer.js` 检测 `adb.exe`、`scrcpy*.exe`、`libusb*.dll` 并判 D、推荐虚拟机。
+- 唯一的例外是 ADB：adb 客户端支持 `ADB_SERVER_SOCKET`，scrcpy 也通过 adb server 工作而不是直接访问 USB。若应用自带 macOS 版 `adb`（本次测试的“客源雷达”即如此），启动器可执行该 Mach-O 二进制启动宿主机 ADB 服务，再让 Wine 内的 `adb.exe`/scrcpy 通过 `tcp:127.0.0.1:5037` 连接（`engine/electron.js` 的 `findHostAdb` + 启动器 `start_host_adb_bridge`）。该桥接不保证所有应用都识别环境变量，因此仍标记为实验性。
+- Windows 内核驱动（`.sys`）与内核反作弊无法在 Wine 加载；Windows 服务不会由 Wine 运行，依赖服务的应用降为 C。Gcenx Wine 缺少 GStreamer 时通常只影响媒体播放，不影响启动。
+
+### 12.5 分发事实
+
+- 未公证的 `.app` 从网络下载后带 `com.apple.quarantine`；macOS 15+ 的右键→打开被取消，只能在“系统设置 → 隐私与安全性 → 仍要打开”放行，或 `xattr -dr com.apple.quarantine`。Apple 支持文档与 Ars Technica 的实测均确认这一点。
+- ad-hoc `codesign -s -` 不能满足 Gatekeeper/公证要求；要真正“双击即开”必须 Apple Developer ID 签名 + 公证，这超出本项目范围。产物因此提供 `Open-Win2Mac-App.command` 与详细中文说明。
+
+参考链接：
+
+- [Apple：Bundle Types（.app 结构）](https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFBundles/BundleTypes/BundleTypes.html)
+- [Electron：ASAR Archives](https://www.electronjs.org/docs/latest/tutorial/asar-archives)
+- [Microsoft Learn：Uninstall Registry Key](https://learn.microsoft.com/en-us/windows/win32/msi/uninstall-registry-key)
+- [Apple 支持：打开未验证的 App](https://support.apple.com/en-us/102445)
+- [WineUSB 早期实现报道](https://www.cnbeta.com.tw/articles/tech/968837.htm)
+- [scrcpy（ADB/USB 依赖）](https://github.com/Genymobile/scrcpy)

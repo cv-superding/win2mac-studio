@@ -3,7 +3,7 @@
 # Double-click this file on macOS. It writes a report and a support bundle to the Desktop.
 set -u
 
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT_ROOT="${WIN2MAC_CHECK_OUTDIR:-$HOME/Desktop}"
 NO_PROMPT="${WIN2MAC_CHECK_NO_PROMPT:-0}"
@@ -35,6 +35,9 @@ exec > >(tee -a "$LOG") 2>&1
 PASS_COUNT=0
 WARN_COUNT=0
 FAIL_COUNT=0
+MISSING_COUNT=0
+SIZE_MISMATCH_COUNT=0
+MANIFEST_COUNT=0
 SUMMARY_LINES=()
 ROSETTA_OK=0
 ENGINE_FOUND=0
@@ -146,6 +149,88 @@ copy_if_exists() {
   cp "$src" "$dest" 2>/dev/null || true
 }
 
+actual_bytes() {
+  wc -c < "$1" 2>/dev/null | tr -d ' '
+}
+
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\t\r\n' '   '
+}
+
+json_array_from_lines() {
+  file="$1"
+  first=1
+  printf '['
+  if [ -f "$file" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      case "$line" in
+        SUMMARY*|'#'*) continue ;;
+      esac
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      printf '"%s"' "$(json_escape "$line")"
+    done < "$file"
+  fi
+  printf ']'
+}
+
+check_payload_inventory() {
+  payload="$WIN2MAC/payload"
+  index="$WIN2MAC/payload-index.tsv"
+  manifest="$WIN2MAC/manifest.sha256"
+  out="$BUNDLE_DIR/Missing.txt"
+  : > "$out" 2>/dev/null || true
+  printf '# payload=%s\n' "$payload" >> "$out"
+  printf '# format=MISSING|SIZE_MISMATCH<TAB>relative_path...\n' >> "$out"
+  checked=0
+  missing=0
+  mismatched=0
+  if [ -f "$index" ]; then
+    while IFS="$(printf '\t')" read -r hash size rel; do
+      [ "$hash" = "sha256" ] && continue
+      [ -n "$rel" ] || continue
+      checked=$((checked + 1))
+      file="$payload/$rel"
+      if [ ! -f "$file" ]; then
+        printf 'MISSING\t%s\texpected_bytes=%s\n' "$rel" "${size:-?}" >> "$out"
+        missing=$((missing + 1))
+      elif [ -n "$size" ]; then
+        actual="$(actual_bytes "$file")"
+        if [ -n "$actual" ] && [ "$actual" != "$size" ]; then
+          printf 'SIZE_MISMATCH\t%s\texpected=%s\tactual=%s\n' "$rel" "$size" "$actual" >> "$out"
+          mismatched=$((mismatched + 1))
+        fi
+      fi
+    done < "$index"
+  elif [ -f "$manifest" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      rel="${line#*  }"
+      [ -n "$rel" ] || continue
+      checked=$((checked + 1))
+      [ -f "$payload/$rel" ] || {
+        printf 'MISSING\t%s\n' "$rel" >> "$out"
+        missing=$((missing + 1))
+      }
+    done < "$manifest"
+  fi
+  if [ -f "$manifest" ]; then
+    MANIFEST_COUNT="$(wc -l < "$manifest" | tr -d ' ')"
+  fi
+  MISSING_COUNT="$missing"
+  SIZE_MISMATCH_COUNT="$mismatched"
+  printf 'SUMMARY\tchecked=%s\tmissing=%s\tsize_mismatch=%s\n' "$checked" "$missing" "$mismatched" >> "$out"
+  if [ "$checked" -eq 0 ]; then
+    record FAIL "文件清单" "缺少 payload-index.tsv 或 manifest.sha256，无法核对文件"
+  elif [ "$missing" -gt 0 ] || [ "$mismatched" -gt 0 ]; then
+    record FAIL "文件清单" "缺失 ${missing} 个、大小不一致 ${mismatched} 个；详见诊断包 Missing.txt"
+    head -n 40 "$out" 2>/dev/null || true
+  else
+    record PASS "文件清单" "${checked} 个文件存在且大小匹配"
+  fi
+}
+
 launch_running() {
   [ -n "$1" ] || return 1
   if command_exists pgrep; then
@@ -249,11 +334,14 @@ if [ -n "$APP" ]; then
 
   if command_exists xattr; then
     XATTRS="$(xattr -l "$APP" 2>/dev/null || true)"
-    if [ -n "$XATTRS" ]; then
+    if printf '%s' "$XATTRS" | grep -q 'com.apple.quarantine'; then
+      record WARN "隔离标记" "检测到 com.apple.quarantine，正在自动清除"
+      xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+    elif [ -n "$XATTRS" ]; then
       record WARN "扩展属性" "$XATTRS"
       printf '%s\n' "$XATTRS"
     else
-      record PASS "扩展属性" "无隔离标记输出"
+      record PASS "扩展属性" "无隔离标记"
     fi
   fi
   if command_exists codesign; then
@@ -277,6 +365,10 @@ if [ -n "$APP" ]; then
   for helper in Open-Win2Mac-App.command Verify-Integrity.command Reset-Runtime.command Start-Mac-Validation.command; do
     helper_path="$SCRIPT_DIR/$helper"
     if [ -f "$helper_path" ]; then
+      if command_exists xattr; then
+        xattr -d com.apple.quarantine "$helper_path" 2>/dev/null || true
+      fi
+      chmod +x "$helper_path" 2>/dev/null || true
       printf '辅助脚本：%s %s\n' "$helper" "$(ls -l "$helper_path" 2>/dev/null || true)"
     fi
   done
@@ -328,7 +420,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-section "4. 载荷完整性（逐文件 SHA-256）"
+section "4. 载荷完整性（文件清单 + SHA-256）"
+if [ -n "$WIN2MAC" ] && [ -d "$WIN2MAC/payload" ]; then
+  check_payload_inventory
+fi
 if [ -n "$WIN2MAC" ] && [ -f "$WIN2MAC/manifest.sha256" ] && [ -d "$WIN2MAC/payload" ]; then
   MANIFEST="$WIN2MAC/manifest.sha256"
   FILE_COUNT="$(wc -l < "$MANIFEST" | tr -d ' ')"
@@ -468,9 +563,13 @@ elif launch_running "$LAUNCHER"; then
 else
   printf '3 秒后启动应用。首次运行可能下载引擎/安装组件，可能需要几分钟…\n'
   sleep 3
-  if command_exists open; then
-    if open -n "$APP"; then
-      record PASS "启动请求" "open -n 已执行"
+  if [ -x "$LAUNCHER" ]; then
+    mkdir -p "$BUNDLE_DIR/Logs" 2>/dev/null
+    ( WIN2MAC_DEBUG=1 nohup "$LAUNCHER" --debug > "$BUNDLE_DIR/Logs/direct-launch.txt" 2>&1 & echo $! > "$BUNDLE_DIR/Logs/direct-launch.pid" )
+    record PASS "启动请求" "直接运行 launcher（WIN2MAC_DEBUG=1，详细日志）"
+  elif command_exists open; then
+    if open -n "$APP" --args --debug; then
+      record PASS "启动请求" "open -n 已执行（--debug 详细 Wine 日志）"
     else
       record FAIL "启动请求" "open 返回失败"
     fi
@@ -518,7 +617,7 @@ fi
 # ---------------------------------------------------------------------------
 section "7. 汇总"
 for line in ${SUMMARY_LINES[@]+"${SUMMARY_LINES[@]}"}; do printf '%s\n' "$line"; done
-printf '\nPASS：%s  WARN：%s  FAIL：%s\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
+printf '\nPASS：%s  WARN：%s  FAIL：%s  缺失文件：%s  大小不一致：%s\n' "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT" "$MISSING_COUNT" "$SIZE_MISMATCH_COUNT"
 if [ "$FAIL_COUNT" -gt 0 ]; then
   VERDICT="发现问题（请把诊断包发回）"
 elif [ "$WARN_COUNT" -gt 0 ]; then
@@ -529,7 +628,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # Build a support bundle without copying the application payload.
-mkdir -p "$BUNDLE_DIR/System" "$BUNDLE_DIR/App" "$BUNDLE_DIR/Logs" 2>/dev/null
+mkdir -p "$BUNDLE_DIR/System" "$BUNDLE_DIR/App" "$BUNDLE_DIR/Logs" "$BUNDLE_DIR/Prefix" 2>/dev/null
+[ -f "$BUNDLE_DIR/Missing.txt" ] || : > "$BUNDLE_DIR/Missing.txt" 2>/dev/null || true
 if command_exists sw_vers; then sw_vers > "$BUNDLE_DIR/System/sw_vers.txt" 2>&1 || true; fi
 uname -a > "$BUNDLE_DIR/System/uname.txt" 2>&1 || true
 if command_exists sysctl; then
@@ -545,25 +645,216 @@ if [ -n "$APP" ]; then
   copy_if_exists "$CONFIG" "$BUNDLE_DIR/App/config.env" || true
   copy_if_exists "$WIN2MAC/bundle.json" "$BUNDLE_DIR/App/bundle.json" || true
   copy_if_exists "$WIN2MAC/manifest.sha256" "$BUNDLE_DIR/App/manifest.sha256" || true
+  copy_if_exists "$WIN2MAC/payload-index.tsv" "$BUNDLE_DIR/App/payload-index.tsv" || true
+  copy_if_exists "$WIN2MAC/payload-index.json" "$BUNDLE_DIR/App/payload-index.json" || true
 fi
 if [ -n "$APP_LOG" ]; then
   copy_if_exists "$APP_LOG" "$BUNDLE_DIR/Logs/$(basename "$APP_LOG")" || true
   copy_if_exists "$APP_LOG.1" "$BUNDLE_DIR/Logs/$(basename "$APP_LOG").1" || true
 fi
+if [ -n "$LOG_ROOT" ] && [ -d "$LOG_ROOT" ]; then
+  for extra_log in "$LOG_ROOT/launcher-"*.log "$LOG_ROOT/state-${APP_ID:-unknown}.env" "$LOG_ROOT/payload-check-${APP_ID:-unknown}.txt" "$LOG_ROOT/integrity-${APP_ID:-unknown}.txt"; do
+    [ -f "$extra_log" ] || continue
+    copy_if_exists "$extra_log" "$BUNDLE_DIR/Logs/$(basename "$extra_log")" || true
+  done
+fi
+if [ -n "$APP" ]; then
+  {
+    echo "== app =="
+    find "$APP" -maxdepth 4 -print 2>/dev/null | head -n 2000 || true
+    echo "== payload =="
+    find "$WIN2MAC/payload" -maxdepth 8 -print 2>/dev/null | head -n 5000 || true
+  } > "$BUNDLE_DIR/App/FileTree.txt" 2>&1
+fi
 [ -f "$BUNDLE_DIR/Integrity.log" ] || rm -f "$BUNDLE_DIR/Integrity.log" 2>/dev/null
+
+{
+  echo "generatedAt=$(date '+%Y-%m-%d %H:%M:%S %z')"
+  uname -a 2>&1 || true
+  if command_exists sw_vers; then sw_vers 2>&1 || true; fi
+  echo "arch=$(uname -m 2>/dev/null || echo unknown)"
+  echo "user=$(id -un 2>/dev/null || echo unknown)"
+  echo "HOME=$HOME"
+  if command_exists df; then df -h "$HOME" 2>&1 || true; fi
+  echo "--- relevant env ---"
+  env | grep -E '^(WIN2MAC|WINE|ADB|DYLD|PATH|HOME|TMPDIR|SHELL)=' 2>/dev/null || true
+} > "$BUNDLE_DIR/System/Environment.txt" 2>&1
+
+{
+  echo "ENGINE_FOUND=$ENGINE_FOUND"
+  echo "POLICY=${POLICY:-}"
+  echo "ORDER=${ORDER:-}"
+  echo "ENGINE_VERSION=${ENGINE_VERSION:-}"
+  echo "WIN2MAC_WINE=${WIN2MAC_WINE:-}"
+  echo "hostAdbArm=$(config_get WIN2MAC_HOST_ADB_ARM)"
+  echo "hostAdbX86=$(config_get WIN2MAC_HOST_ADB_X86)"
+  for candidate in \
+    "${WIN2MAC_WINE:-}" \
+    "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/wine64" \
+    "/Applications/Game Porting Toolkit.app/Contents/Resources/wine/bin/wine64" \
+    "$HOME/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin/wine64" \
+    "/opt/homebrew/bin/wine64" \
+    "/usr/local/bin/wine64"; do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    echo "--- $candidate ---"
+    ls -l "$candidate" 2>&1 || true
+    file "$candidate" 2>&1 || true
+    xattr -l "$candidate" 2>&1 || true
+  done
+  echo "--- cached engines ---"
+  find "$CACHE_ROOT/engines" -maxdepth 3 -print 2>/dev/null | head -n 200 || true
+} > "$BUNDLE_DIR/System/Engine.txt" 2>&1
+
+ps -ax -o pid,command 2>/dev/null | grep -Ei 'wine|win2mac|adb' | grep -v grep | head -n 100 > "$BUNDLE_DIR/System/Processes.txt" 2>&1 || true
+
+{
+  echo "PREFIX=${PREFIX:-}"
+  if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX" ]; then
+    du -sh "$PREFIX" 2>/dev/null || true
+    ls -la "$PREFIX/.win2mac" 2>/dev/null || true
+    for marker in initialized payload-version runtimes-version installer-ran discovered-exe; do
+      [ -f "$PREFIX/.win2mac/$marker" ] && echo "marker: $marker = $(cat "$PREFIX/.win2mac/$marker" 2>/dev/null || true)"
+    done
+    echo "--- drive_c ---"
+    find "$PREFIX/drive_c" -maxdepth 2 -print 2>/dev/null | head -n 300 || true
+    echo "--- users ---"
+    find "$PREFIX/drive_c/users" -maxdepth 3 -print 2>/dev/null | head -n 300 || true
+    echo "--- dosdevices ---"
+    ls -la "$PREFIX/dosdevices" 2>/dev/null || true
+  else
+    echo "prefix does not exist"
+  fi
+} > "$BUNDLE_DIR/Prefix/Prefix.txt" 2>&1
+
+if [ -n "${PREFIX:-}" ] && [ -d "$PREFIX/drive_c/users" ]; then
+  mkdir -p "$BUNDLE_DIR/Prefix/AppLogs" 2>/dev/null || true
+  app_log_index=0
+  while IFS= read -r app_log_file; do
+    [ -n "$app_log_file" ] || continue
+    app_log_index=$((app_log_index + 1))
+    cp "$app_log_file" "$BUNDLE_DIR/Prefix/AppLogs/$(printf '%02d' "$app_log_index")-$(basename "$app_log_file")" 2>/dev/null || true
+  done < <(find "$PREFIX/drive_c/users" -type f \( -iname '*.log' -o -iname '*.txt' \) -mtime -3 -size -5M 2>/dev/null | head -n 50)
+fi
+
 cp "$LOG" "$BUNDLE_DIR/Report.txt" 2>/dev/null || true
+MISSING_HINT=""
+if [ "$MISSING_COUNT" -gt 0 ] || [ "$SIZE_MISMATCH_COUNT" -gt 0 ]; then
+  MISSING_HINT="检测到 ${MISSING_COUNT} 个缺失文件、${SIZE_MISMATCH_COUNT} 个大小不一致文件。先让用户用 Finder 重新解压原始 ZIP；仍失败请重新发送/重建安装包。"
+fi
+
+cat > "$BUNDLE_DIR/Report.json" <<EOF
+{
+  "schema": "win2mac-diagnostics/1",
+  "generatedAt": "$(date '+%Y-%m-%dT%H:%M:%S%z')",
+  "scriptVersion": "$SCRIPT_VERSION",
+  "verdict": "$(json_escape "$VERDICT")",
+  "app": {
+    "name": "$(json_escape "${APP_NAME:-}")",
+    "id": "$(json_escape "${APP_ID:-}")",
+    "bundleId": "$(json_escape "${BUNDLE_ID:-}")",
+    "version": "$(json_escape "${SHORT_VERSION:-}")",
+    "bundlePath": "$(json_escape "${APP:-}")"
+  },
+  "system": {
+    "os": "$(json_escape "$HOST_OS")",
+    "arch": "$(json_escape "$HOST_ARCH")",
+    "macos": "$(sw_vers -productVersion 2>/dev/null || echo unknown)",
+    "user": "$(id -un 2>/dev/null || echo unknown)",
+    "home": "$(json_escape "$HOME")"
+  },
+  "engine": {
+    "found": $ENGINE_FOUND,
+    "policy": "$(json_escape "${POLICY:-}")",
+    "order": "$(json_escape "${ORDER:-}")",
+    "version": "$(json_escape "${ENGINE_VERSION:-}")"
+  },
+  "payload": {
+    "manifestCount": $MANIFEST_COUNT,
+    "missingCount": $MISSING_COUNT,
+    "sizeMismatchCount": $SIZE_MISMATCH_COUNT,
+    "issues": $(json_array_from_lines "$BUNDLE_DIR/Missing.txt")
+  },
+  "checks": {
+    "pass": $PASS_COUNT,
+    "warn": $WARN_COUNT,
+    "fail": $FAIL_COUNT
+  },
+  "paths": {
+    "bundle": "$(json_escape "${APP:-}")",
+    "win2mac": "$(json_escape "${WIN2MAC:-}")",
+    "payload": "$(json_escape "${WIN2MAC:-}/payload")",
+    "prefix": "$(json_escape "${PREFIX:-}")",
+    "launcherLog": "$(json_escape "${APP_LOG:-}")",
+    "collectorLog": "$(json_escape "$LOG")"
+  },
+  "logs": {
+    "launcher": "Logs/$(basename "${APP_LOG:-none}")",
+    "state": "Logs/state.env",
+    "missing": "Missing.txt",
+    "files": "App/FileTree.txt",
+    "engine": "System/Engine.txt",
+    "prefix": "Prefix/Prefix.txt",
+    "appLogs": "Prefix/AppLogs"
+  },
+  "repair": {
+    "expectedManifest": "App/manifest.sha256",
+    "payloadIndex": "App/payload-index.tsv",
+    "missingFile": "Missing.txt",
+    "instructions": "Compare expected manifest/index with actual payload; ask for a fresh ZIP or rebuild. Do not attempt to reconstruct missing binaries from logs."
+  }
+}
+EOF
+
+cat > "$BUNDLE_DIR/Repair.md" <<EOF
+# Win2Mac 修复建议
+
+结论：$VERDICT
+${MISSING_HINT}
+
+## 1. 文件缺失 / 大小不一致
+
+- 期望清单：\`App/manifest.sha256\`、\`App/payload-index.tsv\`
+- 本次问题：\`Missing.txt\`（每行以 \`MISSING\` 或 \`SIZE_MISMATCH\` 开头）
+- 处理顺序：
+  1. 让用户用 Finder 重新解压原始 ZIP（不要用 Windows 资源管理器解压）。
+  2. 重新运行 \`Start-Mac-Validation.command\`。
+  3. 仍有缺失：把 \`Missing.txt\`、\`App/payload-index.tsv\` 发回打包者，重新传输或重新构建安装包。
+- 如果 Mac 上还保留**同一版本**的原始 ZIP：重新解压到新目录，按 \`Missing.txt\` 中的相对路径从新目录复制到当前 payload，复制前用 \`App/manifest.sha256\` 的 SHA-256 校验。不要跨版本混用文件。
+- 不要试图从日志或旧版本目录里“拼”回缺失文件；二进制文件和注册表/原生模块必须来自同一次构建。
+
+## 2. 引擎 / Wine
+
+- 查看 \`System/Engine.txt\`：是否有可执行的 \`wine64\`，以及 \`POLICY\`、\`ORDER\`。
+- \`ENGINE_FOUND=0\`：让用户安装 CrossOver 或 Apple GPTK，或改用带内置引擎的安装包。
+- 下载失败：检查网络/代理；日志中有 \`Download attempt\` 和 curl 返回码。
+
+## 3. 启动日志
+
+- \`Logs/\` 里包含启动器日志、\`launcher-*.log\` 早期日志、\`state.env\` 和完整性结果。
+- 重点搜索：\`STAGE\`、\`FAIL:\`、\`engine ready\`、\`payload check\`、\`wineboot rc\`、\`app exited status\`。
+- \`Prefix/Prefix.txt\` 可确认 prefix 是否初始化、主程序是否复制到 \`drive_c\`。
+
+## 4. 给其他 agent
+
+优先读取 \`Report.json\`（机器可读），再按需查看 \`Report.md\`、\`Missing.txt\`、\`Logs/\`。期望文件清单只能来自 \`App/manifest.sha256\` 和 \`App/payload-index.tsv\`；修复缺失文件需要重新传输或重新打包，不能在用户机器上伪造。
+EOF
+
 cat > "$BUNDLE_DIR/README.txt" <<EOF
 Win2Mac macOS 验证诊断包
 生成时间：$(date '+%Y-%m-%d %H:%M:%S %z')
 结论：$VERDICT
 脚本版本：$SCRIPT_VERSION
+应用：${APP_NAME:-未知}（${APP_ID:-未知}）
 
 包含内容：
+- Report.md / Report.json：人类可读与机器可读汇总
 - Report.txt：本次验证的完整终端日志
-- System/：macOS、机型、CPU、显卡信息
-- App/：Info.plist、config.env、bundle.json、manifest.sha256（不含应用文件）
-- Logs/：该应用的 Wine 启动日志（可能有用户名/路径）
-- Integrity.log：仅当逐文件校验失败时存在
+- Missing.txt：缺失文件、大小不一致清单（若有）
+- Repair.md：修复步骤（供用户或其他 agent）
+- System/：macOS、机型、CPU、显卡、环境变量、引擎候选、进程
+- App/：Info.plist、config.env、bundle.json、manifest.sha256、payload-index.*、FileTree.txt
+- Prefix/：Wine 前缀状态、drive_c/users/dosdevices，以及应用自己写出的日志（AppLogs/）
+- Logs/：启动器日志、launcher-*.log、state.env、完整性结果
 
 隐私提示：日志可能包含本机用户名、安装路径、应用输出。请只发送给可信的打包者；不要公开上传。
 EOF
