@@ -27,9 +27,12 @@ rm -rf "$WORK"
 mkdir -p "$APP/Contents/MacOS" "$PAYLOAD" "$WORK/logs" "$WORK/prefixes" "$WORK/cache" "$WORK/diag"
 
 WINE_BIN="$(find "$WINE_ROOT" \( -type f -o -type l \) -name wine64 | head -n 1)"
+if [ -z "$WINE_BIN" ]; then
+  WINE_BIN="$(find "$WINE_ROOT" \( -type f -o -type l \) -name wine | head -n 1)"
+fi
 CMD_EXE="$(find "$WINE_ROOT" -type f -path '*x86_64-windows/cmd.exe' | head -n 1)"
 if [ -z "$WINE_BIN" ] || [ ! -x "$WINE_BIN" ]; then
-  echo "wine64 not found under $WINE_ROOT"
+  echo "wine/wine64 not found under $WINE_ROOT"
   find "$WINE_ROOT" -maxdepth 3 -print 2>/dev/null | head -n 50 || true
   exit 1
 fi
