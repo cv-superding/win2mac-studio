@@ -95,7 +95,7 @@ macOS .app（Contents/MacOS/launcher + payload + config）
 4. GPTK：设置 `WINEDLLPATH=.../lib/wine/x86_64-windows`、`DYLD_FRAMEWORK_PATH=.../lib/external`，并追加 D3D DLL override。
 5. 前缀：`wineboot -u` → `wineserver -w`；标记 `.win2mac/initialized`。
 6. 载荷：C: 合并到 `drive_c`；D:/F: 复制到 `drive_c/win2mac_<letter>` 并创建 `dosdevices/<letter>:`；版本变化才重新复制。
-7. 环境组件：registry/runtimes 安装一次，版本 hash 变化才重装；运行时用 `wine start /wait` / `msiexec /qn`。
+7. 环境组件：registry/runtimes 安装一次，版本 hash 变化才重装；运行时直接用 `wine <安装器>` 或 `msiexec /i` 调用（不要用 `wine start /wait "<路径>"`，start 会把首个引号参数当窗口标题）。
 8. 启动：`wine <prefix-path> args...`，工作目录在安装目录内才使用，否则回退主程序目录；stdout/stderr 写日志；非零退出弹原生对话框。
 9. 可诊断性：`Open-Win2Mac-App.command` 修权限/隔离；`Verify-Integrity.command` 校验 payload；`Reset-Runtime.command` 重置 prefix；`Start-Mac-Validation.command` 生成桌面日志与诊断 ZIP（系统、配置、引擎、完整性、启动日志；不含 payload）。
 

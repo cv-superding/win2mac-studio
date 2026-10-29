@@ -27,7 +27,7 @@ for arg in "$@"; do
   esac
 done
 
-log_line() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+log_line() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&3; }
 stage() { STAGE="$1"; log_line "STAGE $1${2:+ — $2}"; }
 
 # 日志必须比 config 更早可用：否则缺少 config/路径错误时用户拿不到任何信息。
@@ -41,6 +41,8 @@ if [ -f "$EARLY_LOG" ] && [ "$(wc -c < "$EARLY_LOG" 2>/dev/null | tr -d ' ')" -g
   mv "$EARLY_LOG" "$EARLY_LOG.1" 2>/dev/null || true
 fi
 exec >>"$EARLY_LOG" 2>&1
+# 日志走独立 fd：$(...) 里的 log_line 不能污染命令替换的返回值（例如引擎路径）。
+exec 3>>"$EARLY_LOG"
 log_line "launcher start"
 log_line "bundle=$BUNDLE_DIR"
 log_line "resources=$RES_DIR"
@@ -69,7 +71,10 @@ fi
 : "${WIN2MAC_APP_NAME:=Windows App}"
 : "${WIN2MAC_APP_ID:=unknown}"
 : "${WIN2MAC_BUNDLE_ID:=com.win2mac.unknown}"
+: "${WIN2MAC_APP_VERSION:=unknown}"
 : "${WIN2MAC_PAYLOAD_VERSION:=1}"
+: "${WIN2MAC_EXE_PAYLOAD:=}"
+: "${WIN2MAC_WORKDIR_PAYLOAD:=}"
 : "${WIN2MAC_ENGINE_POLICY:=auto}"
 : "${WIN2MAC_ENGINE_ORDER:=crossover,gptk,whisky,wine}"
 : "${WIN2MAC_ENGINE_ARCHIVE:=}"
@@ -124,6 +129,7 @@ if [ "${WIN2MAC_STREAM_LOG:-0}" = "1" ]; then
 else
   exec >>"$LOG" 2>&1
 fi
+exec 3>>"$LOG"
 case "${WIN2MAC_DEBUG:-0}" in
   1|true|yes) WIN2MAC_WINEDEBUG="fixme-all" ;;
 esac
@@ -271,9 +277,23 @@ rosetta_available() {
   "$arch_bin" -x86_64 true >/dev/null 2>&1
 }
 
+engine_needs_rosetta() {
+  # GPTK 等原生 arm64 引擎不需要 Rosetta；脚本型 wrapper 无法判断，按需要处理。
+  local info
+  info="$(file -b "$WINE" 2>/dev/null || true)"
+  case "$info" in
+    *arm64*|*aarch64*) return 1 ;;
+  esac
+  return 0
+}
+
 ensure_rosetta_if_needed() {
   [ "${HOST_OS:-}" = "Darwin" ] || return 0
   [ "$(uname -m)" = "arm64" ] || return 0
+  if ! engine_needs_rosetta; then
+    log_line "rosetta: engine is arm64, skipped"
+    return 0
+  fi
   if rosetta_available; then
     return 0
   fi
@@ -480,14 +500,15 @@ runtime_engine_url() {
     return 0
   fi
   local api="https://api.github.com/repos/Gcenx/macOS_Wine_builds/releases/latest"
-  local proxy_args=()
+  local proxy_args=() list x86
   [ -n "$WIN2MAC_PROXY" ] && proxy_args=(-x "$WIN2MAC_PROXY")
-  curl -fsSL ${proxy_args[@]+"${proxy_args[@]}"} -H 'User-Agent: Win2Mac-Studio' "$api" 2>/dev/null \
+  list=$(curl -fsSL ${proxy_args[@]+"${proxy_args[@]}"} -H 'User-Agent: Win2Mac-Studio' "$api" 2>/dev/null \
     | tr ',' '\n' \
-    | grep 'browser_download_url' \
-    | grep '\.tar\.xz' \
-    | head -n 1 \
-    | sed -E 's/.*"browser_download_url":[[:space:]]*"([^"]+)".*/\1/'
+    | sed -nE 's/.*"browser_download_url":[[:space:]]*"(https:[^"]+\.tar\.xz)".*/\1/p')
+  [ -n "$list" ] || return 0
+  # 只接受 URL 以 .tar.xz 结尾，避免把 .sha256 校验文件当成引擎包。
+  x86=$(printf '%s\n' "$list" | grep -Ei 'x86_64|osx64' | head -n 1)
+  printf '%s\n' "${x86:-$(printf '%s\n' "$list" | head -n 1)}"
 }
 
 download_and_extract_engine() {
@@ -961,7 +982,8 @@ import_registry_and_runtimes() {
         if [ "${!kind_var:-exe}" = "msi" ]; then
           "$WINE" msiexec /i "C:\\win2mac-setup\\runtimes\\$base" ${!args_var}
         else
-          "$WINE" start /wait "C:\\win2mac-setup\\runtimes\\$base" ${!args_var}
+          # start 会把首个引号参数当窗口标题，带空格的安装器路径会被吞掉，直接调用。
+          "$WINE" "C:\\win2mac-setup\\runtimes\\$base" ${!args_var}
         fi
         rc=$?
         log_line "runtime install $i rc=$rc"
@@ -990,7 +1012,7 @@ copy_userdata() {
     break
   done
   if [ -z "$winuser" ]; then
-    winuser="$PREFIX/drive_c/users/$USER"
+    winuser="$PREFIX/drive_c/users/${USER:-user}"
   fi
   local i=1
   while [ "$i" -le "$WIN2MAC_USERDATA_COUNT" ]; do
@@ -1458,6 +1480,7 @@ if [ "$WIN2MAC_INSTALLER_MODE" = "1" ]; then
   WORKDIR_UNIX="$(dirname "$EXE_UNIX")"
   echo "Discovered installed app: $EXE_UNIX"
 else
+  [ -n "$WIN2MAC_EXE_PAYLOAD" ] || fail "config.env 缺少主程序路径，压缩包可能不完整。请用 Finder 重新解压原始 ZIP。日志：$LOG"
   EXE_UNIX="$(payload_path_to_prefix "$WIN2MAC_EXE_PAYLOAD")"
   log_line "exe expected: $WIN2MAC_EXE_PAYLOAD -> $EXE_UNIX"
   if [ ! -f "$EXE_UNIX" ]; then

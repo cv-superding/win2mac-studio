@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.2 — 2026-10-28
+
+### Fixed
+
+- **引擎路径被日志污染（真机致命）**：`candidate=$(extract_engine_archive …)` 里的 `log_line` 输出会被命令替换捕获，`WINE` 变成“日志行 + 路径”，随后 `wineboot` 返回 127、前缀初始化失败。日志改走独立 fd 3，命令替换只返回路径。内置引擎与首次下载引擎（绝大多数朋友的使用路径）此前都会中招。
+- **运行时安装可能根本没有执行**：启动器用 `wine start /wait "<安装器路径>"` 安装 VC++ 等运行库，Wine/Windows 的 `start` 会把首个引号参数当作窗口标题，带空格的路径被吞掉。改为直接 `wine "<安装器>" <参数>`，随后 `wineserver -w` 等待完成。
+- **Apple Silicon + GPTK 被误判缺 Rosetta**：Rosetta 检查现在先看引擎二进制架构，arm64 引擎（如 GPTK）直接跳过，不再要求安装 Rosetta。
+- **首次下载引擎可能拿到 .sha256 校验文件**：自动解析 Gcenx 最新发布时，URL 必须真正以 `.tar.xz` 结尾，并优先 x86_64/osx64 资产。
+- **config.env 不完整时启动器裸崩**：补充主程序/工作目录/版本号默认值与明确报错，`USER` 未定义也不再触发 `unbound variable`。
+
+### Tests
+
+- 单元测试 40/40：新增“运行库直接调用、不用 start /wait”“arm64 引擎跳过 Rosetta”两条回归；macOS 14/15 CI 继续跑真实 bash。
+
 ## 0.4.1 — 2026-10-28
 
 ### Added

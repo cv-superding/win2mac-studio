@@ -84,6 +84,15 @@ exit 0
 printf 'rejected (unsigned)\\n' >&2
 exit 1
 `,
+    file: `#!/bin/bash
+p=""
+for a in "$@"; do p="$a"; done
+case "\${STUB_ENGINE_ARCH:-x86_64}" in
+  arm64) printf '%s: Mach-O 64-bit executable arm64\\n' "$p" ;;
+  *) printf '%s: Mach-O 64-bit executable x86_64\\n' "$p" ;;
+esac
+exit 0
+`,
     plutil: `#!/bin/bash
 case "$1" in
   -lint) printf '%s: OK\\n' "$2" ;;
@@ -350,6 +359,45 @@ test('macOS launcher refuses ARM Macs without Rosetta and old macOS', { skip: BA
   } finally {
     if (passed) await fsp.rm(root, { recursive: true, force: true });
     else console.error(`macOS launcher guard artifacts kept at ${root}`);
+  }
+});
+
+test('macOS launcher installs bundled runtimes directly and skips Rosetta for arm64 engines', { skip: BASH ? false : 'bash not available' }, async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-macos-runtime-'));
+  let passed = false;
+  try {
+    const fixture = await createFixture(root, {
+      extraConfig: [
+        `WIN2MAC_RUNTIME_COUNT=${shellQuote('1')}`,
+        `WIN2MAC_RUNTIME_1_FILE=${shellQuote('runtimes/vc_redist.x64.exe')}`,
+        `WIN2MAC_RUNTIME_1_KIND=${shellQuote('exe')}`,
+        `WIN2MAC_RUNTIME_1_ARGS=${shellQuote('/quiet /norestart')}`,
+        `WIN2MAC_RUNTIME_1_LABEL=${shellQuote('VC++ 运行库')}`,
+        `WIN2MAC_RUNTIME_VERSION=${shellQuote('v1')}`,
+      ],
+    });
+    await fsp.mkdir(path.join(fixture.win2mac, 'runtimes'), { recursive: true });
+    await fsp.writeFile(path.join(fixture.win2mac, 'runtimes', 'vc_redist.x64.exe'), 'MZ runtime');
+    const shims = path.join(root, 'shims');
+    await createShims(shims);
+
+    const arm64Env = baseEnv(root, shims, { STUB_ROSETTA: '0', STUB_ENGINE_ARCH: 'arm64' });
+    const arm64 = await runBash([toShell(fixture.launcher)], { env: arm64Env, cwd: root });
+    assert.equal(arm64.code, 0, `arm64 engine launch failed:\n${arm64.stdout}\n${arm64.stderr}`);
+    const logDir = path.join(root, 'logs');
+    const appLog = await fsp.readFile(path.join(logDir, 'sim-app.log'), 'utf8');
+    assert.match(appLog, /rosetta: engine is arm64, skipped/);
+
+    const stubLog = await fsp.readFile(path.join(root, 'stub.log'), 'utf8');
+    assert.match(stubLog, /LAUNCHED:C:\\win2mac-setup\\runtimes\\vc_redist\.x64\.exe \/quiet \/norestart/);
+    assert.doesNotMatch(stubLog, /start \/wait/, 'runtime setup must not rely on start /wait title parsing');
+    assert.match(stubLog, /LAUNCHED:.*App\.exe/);
+    const marker = await fsp.readFile(path.join(root, 'prefixes', 'sim-app', '.win2mac', 'runtimes-version'), 'utf8');
+    assert.equal(marker, 'v1');
+    passed = true;
+  } finally {
+    if (passed) await fsp.rm(root, { recursive: true, force: true });
+    else console.error(`macOS runtime artifacts kept at ${root}`);
   }
 });
 
