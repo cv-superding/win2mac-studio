@@ -30,12 +30,12 @@ WINE_BIN="$(find "$WINE_ROOT" \( -type f -o -type l \) -name wine64 | head -n 1)
 if [ -z "$WINE_BIN" ]; then
   WINE_BIN="$(find "$WINE_ROOT" \( -type f -o -type l \) -name wine | head -n 1)"
 fi
-SMOKE_EXE="$(find "$WINE_ROOT" -type f -path '*x86_64-windows/wineboot.exe' | head -n 1)"
+SMOKE_EXE="$(find "$WINE_ROOT" -type f -path '*x86_64-windows/winepath.exe' | head -n 1)"
 if [ -z "$SMOKE_EXE" ] || [ ! -f "$SMOKE_EXE" ]; then
-  echo "Wine wineboot.exe not found under $WINE_ROOT"
+  echo "Wine winepath.exe not found under $WINE_ROOT"
   exit 1
 fi
-echo "wineboot.exe: $SMOKE_EXE"
+echo "winepath.exe: $SMOKE_EXE"
 if [ -z "$WINE_BIN" ] || [ ! -x "$WINE_BIN" ]; then
   echo "wine/wine64 not found under $WINE_ROOT"
   find "$WINE_ROOT" -maxdepth 3 -print 2>/dev/null | head -n 50 || true
@@ -130,9 +130,9 @@ launcher_run() {
   "$APP/Contents/MacOS/launcher" --debug &
   pid=$!
   (
-    sleep 420
+    sleep 180
     if kill -0 "$pid" 2>/dev/null; then
-      echo "smoke timeout: launcher still running after 420s ($label)"
+      echo "smoke timeout: launcher still running after 180s ($label)"
       kill "$pid" 2>/dev/null || true
     fi
   ) &
