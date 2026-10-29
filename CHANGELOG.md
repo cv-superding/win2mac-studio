@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2 — 2026-10-29
+
+### Fixed
+
+- **API Key 泄露**：`app:info` 之前返回含明文的 settings，渲染层可直接拿到 Key；现在统一走掩码输出，smoke 同时断言 `settings:get` 与 `app:info`。
+- **AI 修复边界**：buildId 清洗后用于上下文文件名（防路径穿越）；拒绝渲染层注入任意 diagnostics 对象；同时只允许一个 AI 修复任务；maxSteps 上限 12。
+- **Mac 应用缺少 id/评级**：导入 `.app` 后没有 `id` 与 `analysis`，应用库无法选中；现在生成稳定 id、评级与原因，并禁止把 mac 应用送进 Wine 打包入口。
+- **重建提示**：`patch_config` 现在明确告知模型必须 rebuild 才会更新 ZIP。
+- 新增真实二进制 plist（plistlib 生成）解析与 .app 识别测试；ZIP 自包含回归继续保留。
+
 ## 0.5.1 — 2026-10-29
 
 ### Fixed

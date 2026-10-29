@@ -112,6 +112,7 @@ async function runFetch(endpoint, apiKey, body, { timeoutMs }) {
       signal: controller.signal,
     });
     const text = await response.text();
+    if (text.length > MAX_RESPONSE_BYTES) throw new Error('模型响应超过 2 MB，已中止');
     if (!response.ok) {
       let detail = text.slice(0, 500);
       try {

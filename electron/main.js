@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const yazl = require('yazl');
 const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
@@ -40,6 +41,7 @@ let mainWindow = null;
 let scanCache = null;
 let iconJob = null;
 let currentBuild = null;
+let aiRunActive = false;
 let closePromptOpen = false;
 let forceClose = false;
 
@@ -125,15 +127,19 @@ function buildContextDir() {
   return path.join(appDataDir(), 'build-contexts');
 }
 
+function safeBuildId(buildId) {
+  return String(buildId || '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 100) || 'unknown';
+}
+
 async function recordBuildContext(buildId, context) {
   if (!buildId) return;
   await ensureDir(buildContextDir());
-  await writeJson(path.join(buildContextDir(), `${buildId}.json`), context);
+  await writeJson(path.join(buildContextDir(), `${safeBuildId(buildId)}.json`), context);
 }
 
 async function readBuildContext(buildId) {
   try {
-    return await readJson(path.join(buildContextDir(), `${buildId}.json`));
+    return await readJson(path.join(buildContextDir(), `${safeBuildId(buildId)}.json`));
   } catch {
     return null;
   }
@@ -287,7 +293,7 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
       const backup = `${configPath}.bak-${Date.now().toString(36)}`;
       await fsp.writeFile(backup, original, 'utf8');
       await fsp.writeFile(configPath, text, 'utf8');
-      return { changed: true, applied, backup };
+      return { changed: true, applied, backup, note: '已修改产物内 config.env；需要调用 rebuild 才会生成包含新配置的 ZIP' };
     },
     rebuild,
   };
@@ -327,7 +333,7 @@ function createWindow() {
           await fsp.writeFile(path.join(smokeFixture, 'Smoke Fixture.exe'), Buffer.alloc(5000, 7));
           await fsp.writeFile(path.join(smokeFixture, 'Uninstall Smoke Fixture.exe'), Buffer.alloc(7000, 8));
           result.cacheGroups = await mainWindow.webContents.executeJavaScript('window.win2mac.cacheStats().then((stats) => stats.groups.length)');
-          result.aiSettings = await mainWindow.webContents.executeJavaScript('window.win2mac.getSettings().then((s) => ({ hasKey: Boolean(s.ai && s.ai.hasKey), leaked: Boolean(s.ai && Object.prototype.hasOwnProperty.call(s.ai, "apiKey")) }))');
+          result.aiSettings = await mainWindow.webContents.executeJavaScript('Promise.all([window.win2mac.getSettings(), window.win2mac.info()]).then(([s, info]) => ({ hasKey: Boolean(s.ai && s.ai.hasKey), leaked: Boolean(s.ai && Object.prototype.hasOwnProperty.call(s.ai, "apiKey")) || Boolean(info.settings?.ai && Object.prototype.hasOwnProperty.call(info.settings.ai, "apiKey")) }))');
           const dropped = await mainWindow.webContents.executeJavaScript(`window.win2mac.inspectPath(${JSON.stringify(smokeFixture)}).then((payload) => ({ name: payload?.app?.name || '', kind: payload?.kind || '', exe: payload?.app?.exePath || '' }))`);
           result.drop = dropped;
           const smokeZip = path.join(appDataDir(), 'smoke-fixture.zip');
@@ -608,11 +614,26 @@ async function findMacAppIn(dir) {
   return '';
 }
 
+const MAC_GRADE_LABELS = { A: '可直接重组', B: '可直接重组', C: '可能无法启动', D: '暂不支持' };
+
 async function macAppSelection(bundlePath) {
   const mac = await analyzeMacApp(bundlePath);
+  const id = `mac-${crypto.createHash('sha1').update(mac.path).digest('hex').slice(0, 12)}`;
+  const analysis = {
+    grade: mac.grade,
+    gradeLabel: MAC_GRADE_LABELS[mac.grade] || '待评估',
+    gradeSummary: mac.summary,
+    score: mac.grade === 'A' ? 95 : mac.grade === 'C' ? 60 : 20,
+    reasons: mac.reasons,
+    recommendedEngine: 'native',
+    engineReason: 'Electron 重组为 Windows 原生应用，不使用 Wine',
+    pe: null,
+    blocked: mac.grade === 'D',
+  };
   return {
     kind: 'mac-app',
     app: {
+      id,
       name: mac.name,
       publisher: mac.bundleId,
       version: mac.version,
@@ -624,8 +645,15 @@ async function macAppSelection(bundlePath) {
       registryKeys: [],
       source: 'mac-app',
       platform: 'mac',
+      arch: (mac.exeArchs || []).join('/'),
+      archLabel: (mac.exeArchs || []).join(' / ') || '未知',
+      isDotNet: false,
+      warnings: [],
       macAnalysis: mac,
+      analysis,
+      fullAnalysis: true,
     },
+    analysis,
   };
 }
 
@@ -703,7 +731,7 @@ function setupIpc() {
       arch: process.arch,
       maximized: Boolean(mainWindow?.isMaximized()),
       userData: appDataDir(),
-      settings,
+      settings: publicSettings(settings),
       enginePinned: pinned ? { version: pinned.version, name: pinned.name, size: pinned.sizeLabel, url: pinned.url } : null,
     };
   });
@@ -742,7 +770,8 @@ function setupIpc() {
     if (!settings.ai.apiKey) throw new Error('还没有配置 API Key，请先在设置里填写');
     const buildId = String(payload.buildId || '');
     if (!buildId) throw new Error('缺少构建 ID');
-    const diagnostics = payload.diagnosticsPath ? await importDiagnostics(payload.diagnosticsPath) : payload.diagnostics || null;
+    if (aiRunActive) throw new Error('已有 AI 修复任务在运行');
+    const diagnostics = payload.diagnosticsPath ? await importDiagnostics(payload.diagnosticsPath) : null;
     const sendEvent = (data) => {
       if (!event.sender.isDestroyed()) event.sender.send('ai:event', data);
     };
@@ -797,16 +826,22 @@ function setupIpc() {
       analysisSummary: ctx.analysisSummary,
       diagnosticsSummary: ctx.diagnosticsSummary,
     });
-    const run = await runAgent({
-      settings: {
-        ...settings.ai,
-        proxy: settings.proxy,
-      },
-      tools,
-      userPrompt,
-      maxSteps: Number(payload.maxSteps) || 8,
-      onEvent: sendEvent,
-    });
+    aiRunActive = true;
+    let run;
+    try {
+      run = await runAgent({
+        settings: {
+          ...settings.ai,
+          proxy: settings.proxy,
+        },
+        tools,
+        userPrompt,
+        maxSteps: Math.min(Math.max(Number(payload.maxSteps) || 8, 1), 12),
+        onEvent: sendEvent,
+      });
+    } finally {
+      aiRunActive = false;
+    }
     return {
       buildId,
       finished: run.finished,
@@ -1100,6 +1135,7 @@ function setupIpc() {
     if (currentBuild) throw new Error('已有转换任务正在运行');
     const appInfo = payload.app;
     if (!appInfo) throw new Error('缺少应用信息');
+    if (appInfo.platform === 'mac') throw new Error('macOS 应用请使用「转换为 Windows 版」流程');
     const settings = await readSettings();
     const outputDir = payload.outputDir || settings.outputDir;
     await ensureDir(outputDir);

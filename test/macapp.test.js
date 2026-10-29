@@ -7,7 +7,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-const { analyzeMacApp, parseXmlPlist, machOArchs, readAsarEntries } = require('../engine/macapp');
+const { analyzeMacApp, parseXmlPlist, readPlistSync, machOArchs, readAsarEntries } = require('../engine/macapp');
 const { normalizeElectronVersion, readShasum, assembleWindowsApp } = require('../engine/mactowin');
 
 const MACHO_X64 = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00]);
@@ -69,6 +69,39 @@ async function createMacApp(root, { withNative = false } = {}) {
   }
   return bundle;
 }
+
+test('解析真实二进制 plist（plistlib 生成）', () => {
+  const info = readPlistSync(path.join(__dirname, 'fixtures', 'mac', 'Info.bplist'));
+  assert.equal(info.CFBundleExecutable, 'DemoApp');
+  assert.equal(info.CFBundleShortVersionString, '2.3.4');
+  assert.equal(info.NSHighResolutionCapable, true);
+  assert.deepEqual(info.CFBundleURLTypes[0].CFBundleURLSchemes, ['demo']);
+  const framework = readPlistSync(path.join(__dirname, 'fixtures', 'mac', 'FrameworkInfo.bplist'));
+  assert.equal(framework.CFBundleShortVersionString, '30.0.0');
+});
+
+test('二进制 Info.plist 的 .app 也能识别 Electron 版本', async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'win2mac-bplist-'));
+  try {
+    const bundle = path.join(root, 'Bin.app');
+    const contents = path.join(bundle, 'Contents');
+    const resources = path.join(contents, 'Resources');
+    const framework = path.join(contents, 'Frameworks', 'Electron Framework.framework', 'Resources');
+    await fsp.mkdir(path.join(contents, 'MacOS'), { recursive: true });
+    await fsp.mkdir(resources, { recursive: true });
+    await fsp.mkdir(framework, { recursive: true });
+    await fsp.copyFile(path.join(__dirname, 'fixtures', 'mac', 'Info.bplist'), path.join(contents, 'Info.plist'));
+    await fsp.copyFile(path.join(__dirname, 'fixtures', 'mac', 'FrameworkInfo.bplist'), path.join(framework, 'Info.plist'));
+    await fsp.writeFile(path.join(contents, 'MacOS', 'DemoApp'), MACHO_X64);
+    writeAsar(path.join(resources, 'app.asar'), { 'package.json': '{}' });
+    const analysis = await analyzeMacApp(bundle);
+    assert.equal(analysis.isElectron, true);
+    assert.equal(analysis.electronVersion, '30.0.0');
+    assert.equal(analysis.name, 'Demo');
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
 
 test('macOS plist 解析与 Mach-O 架构识别', () => {
   const info = parseXmlPlist(INFO_PLIST);
@@ -149,6 +182,8 @@ test('组装 Windows 免安装包：重命名 exe、写入载荷与说明', asyn
     await fsp.writeFile(path.join(electronDir, 'resources', 'default_app.asar'), 'default');
     await fsp.writeFile(path.join(electronDir, 'icudtl.dat'), 'icu');
     const outputDir = path.join(root, 'out');
+    await fsp.mkdir(path.join(outputDir, 'Other-Windows-x64'), { recursive: true });
+    await fsp.writeFile(path.join(outputDir, 'Other-Windows-x64', 'x.txt'), 'other');
     const result = await assembleWindowsApp({ analysis, electronDir, outputDir });
     assert.ok(fs.existsSync(result.folderPath));
     assert.ok(fs.existsSync(path.join(result.folderPath, 'Demo.exe')));
@@ -171,6 +206,7 @@ test('组装 Windows 免安装包：重命名 exe、写入载荷与说明', asyn
     });
     assert.ok(entries.some((name) => name.endsWith('Demo.exe')), entries.join(','));
     assert.equal(entries.some((name) => name.endsWith('.zip')), false, 'ZIP 不能把自身写进包里');
+    assert.equal(entries.some((name) => name.includes('Other-Windows-x64')), false, 'ZIP 不能打包输出目录里的其他应用');
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
   }

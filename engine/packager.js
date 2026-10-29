@@ -555,12 +555,14 @@ async function addDirectoryToZip(zip, absoluteDir, zipDir, stats) {
   }
 }
 
-async function writeZip({ rootDir, rootName, zipPath, onProgress, expectedFiles = 0 }) {
+async function writeZip({ rootDir, rootName, zipPath, onProgress, expectedFiles = 0, onlyEntries = null }) {
   await ensureDir(path.dirname(zipPath));
   const resolvedZip = path.resolve(zipPath);
+  const filter = onlyEntries ? new Set(onlyEntries) : null;
   // 先枚举再创建目标文件：ZIP 若位于 rootDir 内，否则会把自己写进包里（yazl 尺寸校验会失败）。
   const topEntries = (await fsp.readdir(rootDir, { withFileTypes: true }))
-    .filter((entry) => path.resolve(rootDir, entry.name) !== resolvedZip);
+    .filter((entry) => path.resolve(rootDir, entry.name) !== resolvedZip)
+    .filter((entry) => !filter || filter.has(entry.name));
   const zip = new yazl.ZipFile();
   const stats = { files: 0, bytes: 0, onFile: null };
   stats.onFile = (file) => {

@@ -177,7 +177,13 @@ async function assembleWindowsApp({ analysis, electronDir, outputDir, onProgress
   emit('zip', '正在压缩 Windows 免安装包…');
   const zipPath = `${folder}.zip`;
   await fsp.rm(zipPath, { force: true }).catch(() => {});
-  const stats = await writeZip({ rootDir: base, rootName: path.basename(folder), zipPath, onProgress });
+  const stats = await writeZip({
+    rootDir: base,
+    rootName: path.basename(folder),
+    zipPath,
+    onProgress,
+    onlyEntries: [path.basename(folder)],
+  });
   const zipSha256 = await sha256File(zipPath);
   emit('done', 'Windows 应用已生成');
   return {
