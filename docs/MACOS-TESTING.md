@@ -142,3 +142,5 @@ npm test
 ```
 
 其中包含真实 macOS bash 执行启动器、Rosetta 分支、首启/二启、完整性校验与辅助脚本。它不能替代上面的 Gatekeeper、CrossOver/GPTK 真机与图形性能验收。
+
+**关于真实 Wine 冒烟**：`macos-real-smoke.yml` 是手动工作流，只能跑在有 GUI/WindowServer 的 self-hosted Mac 或云 Mac 上。GitHub 托管的 macOS Runner 没有图形会话，Wine 会报 `win32k.sys`/`dxgkrnl.sys` 加载失败并在 `wineboot` 阶段挂起，因此不能用来验证应用窗口。真实窗口、Electron 渲染、USB/ADB 仍需物理 Mac 或带 GUI 的云 Mac。

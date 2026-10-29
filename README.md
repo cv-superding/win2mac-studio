@@ -183,7 +183,7 @@ npm run test:e2e :: 打包/首启二启/引擎下载/安装器工作流
 - VC++ 运行时：真实下载 + Microsoft Authenticode 校验 + 模拟安装流程；Windows 服务依赖改为 C 级提示，不再误判 D。
 - 打包后的 Electron 应用通过无窗口 smoke test（preload 桥接、四个导航页面、版本 0.4.1）；真实 IPC 扫描 UI 也通过离屏 smoke-scan（172 应用 / 172 图标 / 0 分析挂起）。
 
-**macOS CI**：仓库内提供 [`.github/workflows/macos-verify.yml`](.github/workflows/macos-verify.yml)，在 `macos-14`/`macos-15` 上跑 `bash -n`、单元测试与真实 Darwin 启动器模拟。当前工作区不是 GitHub 仓库，尚未触发托管 CI；推送后即可运行。
+**macOS CI**：仓库内提供 [`.github/workflows/macos-verify.yml`](.github/workflows/macos-verify.yml)，在 `macos-14`/`macos-15` 上跑 `bash -n`、单元测试与真实 Darwin 启动器模拟。另有手动 `macos-real-smoke.yml`，只能在有 GUI/WindowServer 的 self-hosted Mac 上运行；GitHub 托管 Runner 无图形会话，Wine 无法启动 `win32k.sys`，不能验证真实窗口。
 
 **验证边界**：当前开发环境是 Windows 11；启动器已通过“假 Darwin + 假 Wine”、真实 tar.xz 解压与脚本级测试，并具备 macOS CI，但**仍未在物理 Mac 上启动过**。正式分发前请按 [macOS 真机验收清单](docs/MACOS-TESTING.md) 在一台 Intel 或 Apple Silicon Mac 上做一次冒烟测试（建议同时验证 CrossOver/GPTK 复用路径与 Gatekeeper 首次放行）。
 

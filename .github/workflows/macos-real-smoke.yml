@@ -1,23 +1,22 @@
-name: macOS real Wine smoke
+name: macOS real Wine smoke (manual, GUI runner only)
 
+# GitHub-hosted macOS runners are headless. Wine cannot load win32k.sys/dxgkrnl.sys
+# without a WindowServer session, so this job only works on a self-hosted Mac with
+# a logged-in GUI session (or a cloud Mac with GUI). Use the normal
+# "macOS launcher verification" workflow for hosted-runner regression checks.
 on:
-  push:
-    paths:
-      - 'resources/templates/launcher.sh'
-      - 'resources/templates/mac-check.command'
-      - 'test/ci/macos-real-smoke.sh'
-      - '.github/workflows/macos-real-smoke.yml'
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Self-hosted Mac runner label with a GUI session"
+        required: true
+        default: "self-hosted-macos-gui"
 
 jobs:
   smoke:
-    name: macOS ${{ matrix.os }} + Gcenx Wine
-    runs-on: ${{ matrix.os }}
+    name: macOS Wine smoke on ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-14, macos-15]
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -38,6 +37,13 @@ jobs:
           echo "b63704b91af269bc026a87f12bd297c4a50caaf570c322e600b6621ef918f127  $RUNNER_TEMP/wine-download/wine.tar.xz" | shasum -a 256 -c -
           tar -xf "$RUNNER_TEMP/wine-download/wine.tar.xz" -C "$RUNNER_TEMP/wine-11.18"
 
+      - name: Verify GUI session
+        run: |
+          if ! pgrep -x WindowServer >/dev/null; then
+            echo "No WindowServer session; this job requires a GUI-capable Mac runner." >&2
+            exit 1
+          fi
+
       - name: Run real-macOS smoke
         env:
           WIN2MAC_CI_WINE_ROOT: ${{ runner.temp }}/wine-11.18
@@ -47,10 +53,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-smoke-${{ matrix.os }}
+          name: macos-smoke-${{ inputs.runner }}
           path: |
             ${{ runner.temp }}/win2mac-smoke/logs
             ${{ runner.temp }}/win2mac-smoke/diag
             ${{ runner.temp }}/win2mac-smoke/check
-            ${{ runner.temp }}/win2mac-smoke/*.out
           if-no-files-found: ignore
