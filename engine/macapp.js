@@ -5,6 +5,9 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 
 const ASAR_DATA_OFFSET = 16;
+const MAX_PLIST_OBJECTS = 100000;
+const MAX_PLIST_COLLECTION = 100000;
+const MAX_PLIST_VISITS = 500000;
 
 function decodeEntities(text) {
   return String(text)
@@ -12,7 +15,10 @@ function decodeEntities(text) {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_m, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_m, hex, decimal) => {
+      const code = Number.parseInt(hex || decimal, hex ? 16 : 10);
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+    })
     .replace(/&amp;/g, '&');
 }
 
@@ -85,6 +91,7 @@ function parseXmlPlist(text) {
 }
 
 function parseBinaryPlist(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 40) throw new Error('二进制 plist 过短或格式无效');
   if (buffer.toString('ascii', 0, 8) !== 'bplist00') throw new Error('不是二进制 plist');
   const trailer = buffer.subarray(buffer.length - 32);
   const offsetSize = trailer.readUInt8(6);
@@ -93,8 +100,16 @@ function parseBinaryPlist(buffer) {
   const topObject = Number(trailer.readBigUInt64BE(16));
   const offsetTable = Number(trailer.readBigUInt64BE(24));
   if (!numObjects || !offsetSize || !refSize) throw new Error('二进制 plist 头部异常');
+  // 头部字段来自不可信文件：先确认各项数值落在缓冲区范围内，避免越界读取或超大循环。
+  if (offsetSize > 8 || refSize > 8) throw new Error('二进制 plist 头部异常');
+  if (!Number.isSafeInteger(numObjects) || numObjects > MAX_PLIST_OBJECTS) throw new Error('二进制 plist 对象数量异常');
+  if (!Number.isSafeInteger(offsetTable) || offsetTable < 8 || offsetTable + numObjects * offsetSize > buffer.length) {
+    throw new Error('二进制 plist 偏移表越界');
+  }
+  if (!Number.isSafeInteger(topObject) || topObject < 0 || topObject >= numObjects) throw new Error('二进制 plist 根对象无效');
 
   const readUInt = (offset, size) => {
+    if (!Number.isSafeInteger(offset) || offset < 0 || size < 1 || size > 8 || offset + size > buffer.length) return -1;
     let value = 0;
     for (let i = 0; i < size; i += 1) value = value * 256 + buffer[offset + i];
     return value;
@@ -107,14 +122,22 @@ function parseBinaryPlist(buffer) {
   const readLength = (offset, info) => {
     if (info !== 0x0f) return { length: info, next: offset + 1 };
     const marker = buffer[offset + 1];
+    if (marker === undefined) return null;
     const intSize = 1 << (marker & 0x0f);
-    return { length: readUInt(offset + 2, intSize), next: offset + 2 + intSize };
+    if (intSize > 8) return null;
+    const length = readUInt(offset + 2, intSize);
+    const next = offset + 2 + intSize;
+    if (length < 0 || next > buffer.length) return null;
+    return { length, next };
   };
 
+  let visits = 0;
   const parseObject = (index, depth = 0) => {
-    if (depth > 32) return null;
+    if (depth > 32 || visits >= MAX_PLIST_VISITS) return null;
+    if (!Number.isInteger(index) || index < 0 || index >= numObjects) return null;
+    visits += 1;
     const offset = objectOffsets[index];
-    if (offset == null) return null;
+    if (offset < 0 || offset >= buffer.length) return null;
     const marker = buffer[offset];
     const type = marker >> 4;
     const info = marker & 0x0f;
@@ -125,39 +148,49 @@ function parseBinaryPlist(buffer) {
         return null;
       case 0x1: {
         const size = 1 << info;
+        if (size > 8) return null;
         const value = readUInt(offset + 1, size);
+        if (value < 0) return null;
         return size === 8 ? Number(BigInt.asIntN(64, BigInt(value))) : value;
       }
       case 0x2: {
         const size = 1 << info;
+        if (offset + 1 + size > buffer.length) return null;
         if (size === 4) return buffer.readFloatBE(offset + 1);
         if (size === 8) return buffer.readDoubleBE(offset + 1);
         return null;
       }
       case 0x5: {
-        const { length, next } = readLength(offset, info);
-        return buffer.toString('ascii', next, next + length);
+        const meta = readLength(offset, info);
+        if (!meta) return null;
+        return buffer.toString('ascii', meta.next, meta.next + meta.length);
       }
       case 0x6: {
-        const { length, next } = readLength(offset, info);
-        return buffer.toString('utf16be', next, next + length * 2);
+        const meta = readLength(offset, info);
+        if (!meta) return null;
+        return buffer.toString('utf16be', meta.next, meta.next + meta.length * 2);
       }
       case 0x4: {
-        const { length, next } = readLength(offset, info);
-        return buffer.subarray(next, next + length);
+        const meta = readLength(offset, info);
+        if (!meta) return null;
+        return buffer.subarray(meta.next, meta.next + meta.length);
       }
       case 0xa: {
-        const { length, next } = readLength(offset, info);
+        const meta = readLength(offset, info);
+        if (!meta || meta.length > MAX_PLIST_COLLECTION) return null;
+        if (meta.next + meta.length * refSize > buffer.length) return null;
         const result = [];
-        for (let i = 0; i < length; i += 1) result.push(parseObject(readUInt(next + i * refSize, refSize), depth + 1));
+        for (let i = 0; i < meta.length; i += 1) result.push(parseObject(readUInt(meta.next + i * refSize, refSize), depth + 1));
         return result;
       }
       case 0xd: {
-        const { length, next } = readLength(offset, info);
+        const meta = readLength(offset, info);
+        if (!meta || meta.length > MAX_PLIST_COLLECTION) return null;
+        if (meta.next + meta.length * refSize * 2 > buffer.length) return null;
         const result = {};
-        for (let i = 0; i < length; i += 1) {
-          const key = parseObject(readUInt(next + i * refSize, refSize), depth + 1);
-          const value = parseObject(readUInt(next + (length + i) * refSize, refSize), depth + 1);
+        for (let i = 0; i < meta.length; i += 1) {
+          const key = parseObject(readUInt(meta.next + i * refSize, refSize), depth + 1);
+          const value = parseObject(readUInt(meta.next + (meta.length + i) * refSize, refSize), depth + 1);
           if (typeof key === 'string') result[key] = value;
         }
         return result;
@@ -196,26 +229,21 @@ function machOArchs(buffer) {
       default: return `cpu_${(cpu >>> 0).toString(16)}`;
     }
   };
-  if (magic === 0xcafebabe || magic === 0xcafebabf) {
-    const count = buffer.readUInt32BE(4);
+  // FAT_MAGIC/FAT_MAGIC_64 的大端与小端形式都要支持；64 位 fat 头部每条记录是 32 字节。
+  const readFat = (littleEndian, stride) => {
+    const count = littleEndian ? buffer.readUInt32LE(4) : buffer.readUInt32BE(4);
     const archs = [];
     for (let i = 0; i < Math.min(count, 8); i += 1) {
-      const base = 8 + i * 20;
+      const base = 8 + i * stride;
       if (base + 4 > buffer.length) break;
-      archs.push(archName(buffer.readUInt32BE(base)));
+      archs.push(archName(littleEndian ? buffer.readUInt32LE(base) : buffer.readUInt32BE(base)));
     }
     return [...new Set(archs)];
-  }
-  if (magic === 0xbebafeca) {
-    const count = buffer.readUInt32LE(4);
-    const archs = [];
-    for (let i = 0; i < Math.min(count, 8); i += 1) {
-      const base = 8 + i * 20;
-      if (base + 4 > buffer.length) break;
-      archs.push(archName(buffer.readUInt32LE(base)));
-    }
-    return [...new Set(archs)];
-  }
+  };
+  if (magic === 0xcafebabe) return readFat(false, 20);
+  if (magic === 0xcafebabf) return readFat(false, 32);
+  if (magic === 0xbebafeca) return readFat(true, 20);
+  if (magic === 0xbfbafeca) return readFat(true, 32);
   if (magic === 0xfeedfacf || magic === 0xfeedface) {
     return [archName(buffer.readUInt32BE(4))];
   }
@@ -248,18 +276,39 @@ async function readAsarEntries(asarPath, limit = 50000) {
     }
     const align4 = (value) => Math.ceil(value / 4) * 4;
     const dataStart = ASAR_DATA_OFFSET + align4(headerSize);
+    const toOffset = (value) => {
+      const number = Number(value);
+      return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : 0;
+    };
     const entries = [];
     const walk = (node, prefix) => {
-      if (!node || !node.files || entries.length >= limit) return;
+      if (!node || typeof node !== 'object' || !node.files || entries.length >= limit) return;
       for (const [name, entry] of Object.entries(node.files)) {
+        if (!entry || typeof entry !== 'object') continue;
         const rel = prefix ? `${prefix}/${name}` : name;
         if (entry.files) walk(entry, rel);
-        else entries.push({ path: rel, size: Number(entry.size) || 0, offset: Number(entry.offset) || 0, unpacked: Boolean(entry.unpacked) });
+        else entries.push({ path: rel, size: toOffset(entry.size), offset: toOffset(entry.offset), unpacked: Boolean(entry.unpacked) });
         if (entries.length >= limit) return;
       }
     };
     walk(header, '');
     return { entries, dataStart };
+  } finally {
+    await handle.close().catch(() => {});
+  }
+}
+
+const MACHO_HEAD_BYTES = 4096;
+
+async function readAsarEntryBuffer(asarPath, entry, dataStart, maxBytes = 1024 * 1024) {
+  if (!entry || entry.unpacked) return null;
+  const size = Math.min(Math.max(Number(entry.size) || 0, 0), maxBytes);
+  if (!size) return null;
+  const handle = await fsp.open(asarPath, 'r');
+  try {
+    const buffer = Buffer.alloc(size);
+    const read = await handle.read(buffer, 0, size, dataStart + entry.offset);
+    return read.bytesRead === size ? buffer : null;
   } finally {
     await handle.close().catch(() => {});
   }
@@ -272,9 +321,11 @@ async function inspectNativeModules(asarPath, asarEntries, dataStart, unpackedRo
     const handle = await fsp.open(asarPath, 'r');
     try {
       for (const entry of packed) {
-        const buffer = Buffer.alloc(Math.min(8, entry.size));
-        await handle.read(buffer, 0, Math.min(8, entry.size), dataStart + entry.offset);
-        results.push({ path: entry.path, archs: machOArchs(buffer), packed: true });
+        // 通用（fat）Mach-O 的架构表最长约 264 字节，只读 8 字节会漏掉 .node 的架构。
+        const size = Math.min(MACHO_HEAD_BYTES, Math.max(Number(entry.size) || 0, 0));
+        const buffer = Buffer.alloc(size);
+        const read = size ? await handle.read(buffer, 0, size, dataStart + entry.offset) : { bytesRead: 0 };
+        results.push({ path: entry.path, archs: machOArchs(buffer.subarray(0, read.bytesRead)), packed: true });
       }
     } finally {
       await handle.close().catch(() => {});
@@ -298,8 +349,9 @@ async function inspectNativeModules(asarPath, asarEntries, dataStart, unpackedRo
           let head = Buffer.alloc(0);
           try {
             const handle = await fsp.open(full, 'r');
-            head = Buffer.alloc(8);
-            await handle.read(head, 0, 8, 0);
+            const buffer = Buffer.alloc(MACHO_HEAD_BYTES);
+            const read = await handle.read(buffer, 0, buffer.length, 0);
+            head = buffer.subarray(0, read.bytesRead);
             await handle.close();
           } catch { /* ignore */ }
           results.push({ path: path.relative(unpackedRoot, full).replace(/\\/g, '/'), archs: machOArchs(head), packed: false });
@@ -325,7 +377,11 @@ async function analyzeMacApp(appPath) {
   const infoPath = path.join(contents, 'Info.plist');
   const info = readPlistSync(infoPath);
   if (!info) throw new Error('不是有效的 macOS .app：缺少可解析的 Contents/Info.plist');
-  const executable = String(info.CFBundleExecutable || '');
+  const executableRaw = String(info.CFBundleExecutable || '');
+  // CFBundleExecutable 只能是 MacOS/ 下的文件名；拒绝 ../ 与绝对路径，避免读取包外文件。
+  const executable = executableRaw && !/[\\/]/.test(executableRaw) && executableRaw !== '.' && executableRaw !== '..'
+    ? executableRaw
+    : '';
   const exePath = executable ? path.join(contents, 'MacOS', executable) : '';
   const resourcesDir = path.join(contents, 'Resources');
   const asarPath = firstExisting([path.join(resourcesDir, 'app.asar')]);
@@ -351,14 +407,6 @@ async function analyzeMacApp(appPath) {
   const isElectron = Boolean(asarPath || appDir) && Boolean(
     framework || /electron/i.test(String(info.CFBundleIdentifier || '')) || asarPath,
   );
-  let electronVersion = String(framework?.CFBundleShortVersionString || '');
-  if (!electronVersion && asarPath) {
-    const pkgFile = path.join(resourcesDir, 'app', 'package.json');
-    const pkg = readPlistSync(pkgFile) || (() => {
-      try { return JSON.parse(fs.readFileSync(pkgFile, 'utf8')); } catch { return null; }
-    })();
-    electronVersion = String(pkg?.devDependencies?.electron || pkg?.dependencies?.electron || '').replace(/^[^\d]*/, '');
-  }
 
   let asarEntries = [];
   let dataStart = 0;
@@ -368,6 +416,25 @@ async function analyzeMacApp(appPath) {
       asarEntries = parsed.entries;
       dataStart = parsed.dataStart;
     } catch { /* ignore */ }
+  }
+
+  let electronVersion = String(framework?.CFBundleShortVersionString || framework?.CFBundleVersion || '').trim();
+  if (!electronVersion) {
+    // 未找到 Electron Framework 时，版本通常写在 Resources/app/package.json；asar 打包的应用需要从 asar 内读取。
+    let pkg = null;
+    const pkgEntry = asarEntries.find((entry) => entry.path === 'package.json');
+    if (asarPath && pkgEntry) {
+      try {
+        const raw = await readAsarEntryBuffer(asarPath, pkgEntry, dataStart);
+        if (raw) pkg = JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, ''));
+      } catch { /* ignore */ }
+    }
+    if (!pkg) {
+      try {
+        pkg = JSON.parse(fs.readFileSync(path.join(resourcesDir, 'app', 'package.json'), 'utf8').replace(/^\uFEFF/, ''));
+      } catch { /* ignore */ }
+    }
+    electronVersion = String(pkg?.devDependencies?.electron || pkg?.dependencies?.electron || '').trim().replace(/^[^\d]*/, '');
   }
   const nativeModules = await inspectNativeModules(asarPath || '', asarEntries, dataStart, unpackedRoot || '');
   const machoNative = nativeModules.filter((entry) => entry.archs.length > 0);

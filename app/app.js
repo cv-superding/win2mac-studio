@@ -23,7 +23,7 @@
   const GRADE_TONE = { A: 'green', B: 'blue', C: 'amber', D: 'red' };
   const GRADE_LABEL = { A: '可直接运行', B: '通常可运行', C: '需要调校', D: '不建议运行' };
   const TONE_COLOR = { green: '#1f7a4d', blue: '#2860c9', amber: '#9a6206', red: '#b42318' };
-  const ENGINE_LABEL = { wine: 'Wine', gptk: 'Apple GPTK / CrossOver', vm: 'Windows 虚拟机', none: '原生 Mac 版本' };
+  const ENGINE_LABEL = { wine: 'Wine', gptk: 'Apple GPTK / CrossOver', vm: 'Windows 虚拟机', none: '原生 Mac 版本', native: 'Electron 重组' };
   const STAGE_DEFS = [
     ['analyze', '分析应用与依赖'],
     ['payload', '原样复制应用文件'],
@@ -34,6 +34,13 @@
     ['icon', '生成 macOS 图标'],
     ['zip', '压缩 .app 安装包'],
   ];
+  const MAC_STAGE_DEFS = [
+    ['runtime', '准备 Electron Windows 运行时'],
+    ['assemble', '重组 Electron 应用载荷'],
+    ['zip', '压缩 Windows 安装包'],
+  ];
+  const MAC_STAGE_ALIAS = { start: 'runtime', runtime: 'runtime', assemble: 'assemble', payload: 'assemble', zip: 'zip', done: 'zip' };
+  const MAC_STAGE_RANGE = { start: [0, 0], runtime: [0, 70], assemble: [70, 92], zip: [92, 99], done: [100, 100] };
   const STAGE_RANGE = {
     start: [0, 0],
     analyze: [0, 2],
@@ -88,6 +95,7 @@
     batch: null,
     pendingRecipe: null,
     archiveProgress: null,
+    archiveImporting: false,
     cacheStats: null,
     cacheLoading: false,
     cacheError: null,
@@ -96,6 +104,8 @@
 
   let toastCounter = 0;
   let proxySaveTimer = null;
+  let aiBusy = false;
+  let diagnosticsBusy = false;
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -167,7 +177,7 @@
     }
     const tone = GRADE_TONE[grade] || 'neutral';
     const title = app.analysis ? `${app.analysis.gradeSummary || ''}${app.fullAnalysis ? '' : '（快速评估，打开详情做深度检查）'}` : '';
-    return `<span class="grade ${tone}" title="${esc(title)}"><i></i>${grade}${compact ? '' : ` · ${GRADE_LABEL[grade]}`}</span>`;
+    return `<span class="grade ${tone}" title="${esc(title)}"><i></i>${esc(grade)}${compact ? '' : ` · ${esc(GRADE_LABEL[grade] || '')}`}</span>`;
   }
 
   function stats() {
@@ -187,7 +197,7 @@
     const query = state.filters.query.trim().toLowerCase();
     let list = state.apps.filter((app) => {
       if (query) {
-        const haystack = `${app.name} ${app.publisher} ${app.installPath} ${app.exePath}`.toLowerCase();
+        const haystack = `${app.name || ''} ${app.publisher || ''} ${app.installPath || ''} ${app.exePath || ''}`.toLowerCase();
         if (!haystack.includes(query)) return false;
       }
       const grade = gradeOf(app);
@@ -212,9 +222,16 @@
     const path = app.installPath || app.exePath || '';
     const size = app.estimatedSizeBytes || app.analysis?.directory?.scannedBytes || 0;
     const selected = state.batchMode && state.batchSelected.has(app.id);
-    const canConvert = Boolean(app.exePath && app.analysis);
+    const isMac = app.platform === 'mac';
+    const canConvert = Boolean(app.analysis && (app.exePath || isMac) && (!isMac || api.buildWindowsApp));
+    const convertTitle = isMac ? '转换为 Windows 免安装版' : '一键转换为 .app';
+    const convertHint = !app.analysis
+      ? '等待兼容性分析完成'
+      : isMac && !api.buildWindowsApp
+        ? '当前环境不支持 Mac → Windows 转换'
+        : convertTitle;
     return `
-      <div class="app-row ${selected ? 'selected' : ''}" role="button" tabindex="0" data-app-id="${esc(app.id)}" data-app-row="${esc(app.id)}" aria-label="${state.batchMode ? '选择' : '查看'} ${esc(app.name)}">
+      <div class="app-row ${selected ? 'selected' : ''}" role="button" tabindex="0" data-app-id="${esc(app.id)}" data-app-row="${esc(app.id)}"${state.batchMode ? ` aria-pressed="${selected}"` : ''} aria-label="${state.batchMode ? '选择' : '查看'} ${esc(app.name)}">
         <div class="app-main">
           ${state.batchMode ? `<span class="row-check ${selected ? 'on' : ''}">${selected ? '<svg class="icon"><use href="#i-check"></use></svg>' : ''}</span>` : ''}
           ${iconHtml(app)}
@@ -225,15 +242,15 @@
         </div>
         <div class="app-source">
           <span class="path" title="${esc(path)}">${esc(path)}</span>
-          <span>${app.source === 'shortcut' ? '开始菜单快捷方式' : app.source === 'manual' ? '手动选择' : app.source === 'archive' ? '压缩包导入' : '已安装应用'}${app.bits ? ` · ${app.bits} 位` : ''}</span>
+          <span>${esc(sourceLabel(app))}${app.bits ? ` · ${esc(app.bits)} 位` : ''}</span>
         </div>
-        <span class="arch-chip">${esc(app.arch === 'x64' ? 'x64' : app.arch === 'x86' ? 'x86' : app.arch === 'arm64' ? 'ARM64' : '—')}</span>
+        <span class="arch-chip">${esc(app.arch === 'x64' ? 'x64' : app.arch === 'x86' ? 'x86' : app.arch === 'arm64' ? 'ARM64' : isMac && app.arch ? String(app.arch).toUpperCase() : '—')}</span>
         <span class="size-cell">${fmtBytes(size)}</span>
         ${gradeBadge(app)}
         <span class="row-actions">
           ${state.batchMode
             ? '<span class="row-chevron"><svg class="icon"><use href="#i-chevron"></use></svg></span>'
-            : `<button class="row-convert" data-action="convert-app" data-convert-id="${esc(app.id)}" aria-label="转换 ${esc(app.name)}" title="${canConvert ? '一键转换为 .app' : '等待兼容性分析完成'}" ${canConvert ? '' : 'disabled'}><svg class="icon"><use href="#i-play"></use></svg><span>转换</span></button>`}
+            : `<button class="row-convert" data-action="convert-app" data-convert-id="${esc(app.id)}" aria-label="转换 ${esc(app.name)}" title="${esc(convertHint)}" ${canConvert ? '' : 'disabled'}><svg class="icon"><use href="#i-play"></use></svg><span>转换</span></button>`}
         </span>
       </div>`;
   }
@@ -465,6 +482,7 @@
     syncOverlayLock();
     if (lastId) {
       requestAnimationFrame(() => {
+        if (state.page !== 'library' || state.selectedId) return;
         document.querySelector(`[data-app-row="${CSS.escape(lastId)}"]`)?.focus();
       });
     }
@@ -474,6 +492,10 @@
     if (state.demo) {
       app.fullAnalysis = true;
       delete app.analysisError;
+      return;
+    }
+    if (app.platform === 'mac') {
+      app.fullAnalysis = true;
       return;
     }
     if (app.fullAnalysis && !force) return;
@@ -507,6 +529,10 @@
   async function reselectExe() {
     const app = state.apps.find((item) => item.id === state.selectedId);
     if (!app) return;
+    if (app.platform === 'mac') {
+      toast('macOS 应用没有可替换的 Windows 主程序', 'warn');
+      return;
+    }
     if (!api.pickAppExe) {
       toast('当前环境不支持重新指定主程序', 'warn');
       return;
@@ -552,7 +578,8 @@
     const analysis = app.analysis;
     const grade = analysis?.grade;
     const tone = analysis ? GRADE_TONE[grade] : 'green';
-    const score = analysis?.score ?? 0;
+    const score = Math.max(0, Math.min(100, Math.round(Number(analysis?.score) || 0)));
+    const isMac = app.platform === 'mac';
     const loading = !analysis;
     const reasons = analysis?.reasons || [];
     const deps = analysis?.dependencies || {};
@@ -570,7 +597,10 @@
     if (!depItems.length) depItems.push(['特殊依赖', '未检测到']);
     const engine = analysis?.recommendedEngine || 'wine';
     const blocked = analysis?.blocked || grade === 'D';
-    const sourceNote = app.source === 'shortcut' ? '开始菜单快捷方式' : app.source === 'manual' ? '手动选择' : app.source === 'archive' ? '压缩包导入' : '注册表';
+    const sourceNote = isMac ? sourceLabel(app) : app.source === 'shortcut' ? '开始菜单快捷方式' : app.source === 'manual' ? '手动选择' : app.source === 'archive' ? '压缩包导入' : '注册表';
+    const canBuild = Boolean(analysis && (app.exePath || isMac) && (!isMac || api.buildWindowsApp));
+    const alreadyOpen = Boolean(drawerRoot.querySelector('.drawer'));
+    const bodyScroll = alreadyOpen ? drawerRoot.querySelector('.drawer-body')?.scrollTop || 0 : 0;
     drawerRoot.innerHTML = `
       <div class="scrim" data-action="close-drawer"></div>
       <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabindex="-1">
@@ -599,7 +629,7 @@
             </div>
             ${state.analysisRefreshing ? '<div class="warning-inline"><svg class="icon"><use href="#i-refresh"></use></svg><span>正在执行深度目录检查，评估结果会实时更新。</span></div>' : ''}
             ${app.analysisError ? `<div class="warning-inline error-inline"><svg class="icon"><use href="#i-alert"></use></svg><span>深度分析失败：${esc(app.analysisError)} <button class="link-btn" data-action="retry-analysis">重试</button></span></div>` : ''}
-            ${blocked ? '<div class="warning-inline"><svg class="icon"><use href="#i-alert"></use></svg><span>Wine 存在硬性阻断。仍可生成 .app，但建议优先寻找官方 Mac 版或使用 Windows 虚拟机。</span></div>' : ''}
+            ${blocked ? `<div class="warning-inline"><svg class="icon"><use href="#i-alert"></use></svg><span>${isMac ? '该 .app 不满足重组条件。仍可尝试生成 Windows 免安装包，但可能无法运行。' : 'Wine 存在硬性阻断。仍可生成 .app，但建议优先寻找官方 Mac 版或使用 Windows 虚拟机。'}</span></div>` : ''}
             <div class="section-title">兼容性明细</div>
             <div class="reason-list">
               ${reasons.map((reason) => `
@@ -614,30 +644,34 @@
             </div>
             <div class="section-title">运行引擎</div>
             <div class="engine-box">
-              <span class="tag"><svg class="icon" style="width:12px;height:12px"><use href="#i-${engine === 'gptk' ? 'spark' : engine === 'vm' ? 'windows' : 'package'}"></use></svg>${esc(ENGINE_LABEL[engine] || 'Wine')}</span>
-              <p>${esc(analysis.engineReason || '使用开源 Wine 运行时。')}</p>
+              <span class="tag"><svg class="icon" style="width:12px;height:12px"><use href="#i-${engine === 'native' ? 'windows' : engine === 'gptk' ? 'spark' : engine === 'vm' ? 'windows' : 'package'}"></use></svg>${esc(ENGINE_LABEL[engine] || (isMac ? 'Electron 重组' : 'Wine'))}</span>
+              <p>${esc(analysis.engineReason || (isMac ? '将 Electron 载荷重组为 Windows 免安装版，不使用 Wine。' : '使用开源 Wine 运行时。'))}</p>
             </div>
             <div class="section-title">源文件</div>
             <div class="kv-list">
               <div class="kv"><span>安装目录</span><div class="copy-line"><code title="${esc(app.installPath)}">${esc(app.installPath)}</code><button data-copy="${esc(app.installPath)}" aria-label="复制安装目录"><svg class="icon" style="width:12px;height:12px"><use href="#i-copy"></use></svg></button></div></div>
-              <div class="kv"><span>主程序</span><div class="copy-line"><code title="${esc(app.exePath)}">${esc(app.exePath || '未找到')}</code><button data-copy="${esc(app.exePath)}" aria-label="复制主程序路径"><svg class="icon" style="width:12px;height:12px"><use href="#i-copy"></use></svg></button><button class="edit-exe" data-action="pick-app-exe">更改</button></div></div>
+              <div class="kv"><span>主程序</span><div class="copy-line"><code title="${esc(app.exePath)}">${esc(app.exePath || '未找到')}</code><button data-copy="${esc(app.exePath)}" aria-label="复制主程序路径"><svg class="icon" style="width:12px;height:12px"><use href="#i-copy"></use></svg></button>${isMac ? '' : '<button class="edit-exe" data-action="pick-app-exe">更改</button>'}</div></div>
               <div class="kv"><span>架构 / 体积</span><b>${esc(app.archLabel || app.arch || '未知')} · ${fmtBytes(app.estimatedSizeBytes || analysis.directory?.scannedBytes || 0)}</b></div>
               <div class="kv"><span>注册表快照</span><b>${app.registryKeys?.length || 0} 项</b></div>
-              <div class="kv"><span>扫描信息</span><b>${analysis.directory?.scannedFiles ? `检查 ${analysis.directory.scannedFiles.toLocaleString('zh-CN')} 个文件` : '快速评估'}</b></div>
+              <div class="kv"><span>扫描信息</span><b>${analysis.directory?.scannedFiles ? `检查 ${esc(analysis.directory.scannedFiles.toLocaleString('zh-CN'))} 个文件` : '快速评估'}</b></div>
               ${analysis.services?.length ? `<div class="kv"><span>Windows 服务</span><b>${esc(analysis.services.map((item) => item.name).join('、'))}</b></div>` : ''}
             </div>
-            <div class="warning-inline" style="background:#f5f3ed;color:var(--muted);"><svg class="icon"><use href="#i-info"></use></svg><span>这是兼容性评估，不是运行承诺。Wine 不加载内核驱动，也无法绕过反作弊或 DRM。</span></div>
+            <div class="warning-inline" style="background:#f5f3ed;color:var(--muted);"><svg class="icon"><use href="#i-info"></use></svg><span>${isMac ? '这是 Electron 载荷重组，不是原生移植；目标 Windows 版与原应用的 Electron 版本强相关。' : '这是兼容性评估，不是运行承诺。Wine 不加载内核驱动，也无法绕过反作弊或 DRM。'}</span></div>
             `}
         </div>
         <div class="drawer-foot">
           <button class="btn btn-ghost" data-action="show-install" ${app.installPath ? '' : 'disabled'}><svg class="icon"><use href="#i-folder"></use></svg>打开位置</button>
-          <button class="btn ${blocked ? 'btn-primary' : 'btn-accent'}" data-action="open-build" ${app.exePath && app.analysis ? '' : 'disabled'}>
-            <svg class="icon"><use href="#i-play"></use></svg>${blocked ? '仍然尝试打包' : '一键转换为 .app'}
+          <button class="btn ${blocked ? 'btn-primary' : 'btn-accent'}" data-action="open-build" ${canBuild ? '' : 'disabled'} title="${canBuild ? '' : isMac && !api.buildWindowsApp ? '当前环境不支持 Mac → Windows 转换' : '等待兼容性分析完成'}">
+            <svg class="icon"><use href="#i-play"></use></svg>${isMac ? (blocked ? '仍然尝试重组' : '转换为 Windows 版') : (blocked ? '仍然尝试打包' : '一键转换为 .app')}
           </button>
         </div>
       </aside>`;
     syncOverlayLock();
-    requestAnimationFrame(() => drawerRoot.querySelector('.drawer')?.focus());
+    if (bodyScroll) {
+      const body = drawerRoot.querySelector('.drawer-body');
+      if (body) body.scrollTop = bodyScroll;
+    }
+    if (!alreadyOpen) requestAnimationFrame(() => drawerRoot.querySelector('.drawer')?.focus());
   }
 
   function defaultBuildOptions() {
@@ -692,12 +726,20 @@
       toast('请等待兼容性分析完成', 'warn');
       return;
     }
+    if (app.platform === 'mac' && !api.buildWindowsApp) {
+      toast('当前环境不支持 Mac → Windows 转换', 'warn');
+      return;
+    }
     state.build = createBuildState(app);
     if (state.pendingRecipe) {
-      const recipe = state.pendingRecipe;
-      state.pendingRecipe = null;
-      applyRecipeOptions(state.build, recipe);
-      toastRecipeApplied(recipe, app);
+      if (app.platform === 'mac') {
+        toast('已导入的配方仅适用于 Windows 应用，已保留待用', 'info');
+      } else {
+        const recipe = state.pendingRecipe;
+        state.pendingRecipe = null;
+        applyRecipeOptions(state.build, recipe);
+        toastRecipeApplied(recipe, app);
+      }
     }
     renderModal();
   }
@@ -708,6 +750,7 @@
     const lastAppId = state.build.app?.id;
     state.build = null;
     modalRoot.innerHTML = '';
+    delete modalRoot.dataset.step;
     syncOverlayLock();
     requestAnimationFrame(() => {
       const target = drawerRoot.querySelector('[data-action="open-build"]')
@@ -718,6 +761,14 @@
 
   function baseName(filePath) {
     return String(filePath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+  }
+
+  function sourceLabel(app) {
+    if (app.platform === 'mac') return app.source === 'mac-archive' ? 'macOS 压缩包导入' : 'macOS 应用';
+    if (app.source === 'shortcut') return '开始菜单快捷方式';
+    if (app.source === 'manual') return '手动选择';
+    if (app.source === 'archive') return '压缩包导入';
+    return '已安装应用';
   }
 
   function presetForArgs(args, type = 'exe') {
@@ -774,8 +825,8 @@
     const name = String(recipe?.match?.name || recipe?.app?.name || '').toLowerCase().trim();
     const exe = baseName(recipe?.match?.exeName || recipe?.app?.exeName || '').toLowerCase();
     const publisher = String(recipe?.match?.publisher || recipe?.app?.publisher || '').toLowerCase().trim();
-    const candidates = state.apps.filter((app) => app.exePath);
-    const exact = candidates.find((app) => name && app.name.toLowerCase().trim() === name);
+    const candidates = state.apps.filter((app) => app.exePath && app.platform !== 'mac');
+    const exact = candidates.find((app) => name && String(app.name || '').toLowerCase().trim() === name);
     if (exact) return exact;
     const byExe = candidates.find((app) => exe && baseName(app.exePath).toLowerCase() === exe);
     if (byExe) return byExe;
@@ -786,6 +837,10 @@
   }
 
   async function openRecipeBuild(app, recipe) {
+    if (app.platform === 'mac') {
+      toast('移植配方只适用于 Windows 应用', 'warn');
+      return false;
+    }
     if (!app.analysis) {
       toast('正在分析目标应用…', 'info');
       try {
@@ -795,13 +850,14 @@
         app.fullAnalysis = true;
       } catch (error) {
         toast(`无法分析目标应用：${error.message}`, 'error');
-        return;
+        return false;
       }
     }
     closeDrawer();
     state.build = createBuildState(app);
     applyRecipeOptions(state.build, recipe);
     renderModal();
+    return true;
   }
 
   async function exportRecipe() {
@@ -824,7 +880,9 @@
         name: result.recipe?.app?.name || build.app.name,
         exportedPath: result.path,
       };
+      if (state.build !== build) return;
       renderModal();
+      requestAnimationFrame(() => modalRoot.querySelector('[data-action="export-recipe"]')?.focus());
       toast(`配方已导出：${baseName(result.path)}`, 'success');
     } catch (error) {
       toast(`导出配方失败：${error.message}`, 'error');
@@ -834,6 +892,10 @@
   async function importRecipe() {
     if (!api.importRecipe) {
       toast('当前环境不支持导入配方', 'warn');
+      return;
+    }
+    if (state.archiveImporting) {
+      toast('已有导入任务正在进行，请稍候', 'warn');
       return;
     }
     try {
@@ -856,10 +918,13 @@
         toastRecipeApplied(recipe, state.build.app);
         return;
       }
-      const app = findRecipeApp(recipe) || (state.selectedId && state.apps.find((item) => item.id === state.selectedId));
+      const selected = state.selectedId
+        ? state.apps.find((item) => item.id === state.selectedId && item.platform !== 'mac')
+        : null;
+      const app = findRecipeApp(recipe) || selected || null;
       if (app) {
-        await openRecipeBuild(app, recipe);
-        toastRecipeApplied(recipe, app);
+        const opened = await openRecipeBuild(app, recipe);
+        if (opened) toastRecipeApplied(recipe, app);
         return;
       }
       state.pendingRecipe = recipe;
@@ -886,21 +951,39 @@
     const build = state.build;
     if (!build) {
       modalRoot.innerHTML = '';
+      delete modalRoot.dataset.step;
       syncOverlayLock();
       return;
     }
     const app = build.app;
     const analysis = app.analysis;
+    const hadModal = Boolean(modalRoot.querySelector('.modal'));
+    const previousStep = modalRoot.dataset.step || '';
+    const advancedOpen = Boolean(modalRoot.querySelector('.advanced-box[open]'));
+    const modalBodyScroll = previousStep === build.step ? modalRoot.querySelector('.modal-body')?.scrollTop || 0 : 0;
     if (build.step === 'setup') {
-      const estimate = estimateBundle(analysis, build.options);
+      const isMac = app.platform === 'mac';
+      const estimate = isMac ? 0 : estimateBundle(analysis, build.options);
       const dotnet = analysis?.dependencies?.dotnetFramework;
       const blocked = analysis?.blocked || analysis?.grade === 'D';
+      const title = isMac ? '转换为 Windows' : build.installer ? '打包安装器' : '转换';
+      const subtitle = isMac
+        ? `Electron ${esc(app.macAnalysis?.electronVersion || '—')} · ${esc(analysis?.gradeSummary || '')}`
+        : build.installer
+          ? '实验性安装器模式 · 首次启动在 Wine 中安装目标程序'
+          : `${esc(analysis?.reasonSummary || '')} · 兼容性 ${esc(analysis?.grade || '—')} · ${esc(GRADE_LABEL[analysis?.grade] || '')}`;
+      const footNote = isMac
+        ? '只重组 Electron 载荷，输出 Windows 免安装目录与 ZIP。'
+        : `${build.installer ? '原始安装包不做修改。' : '原始 Windows 文件不做修改。'}${estimate ? `预计 ZIP 约 ${fmtBytes(estimate)}（含运行时估算）。` : 'ZIP 大小取决于应用体积。'}`;
+      const footNote2 = isMac
+        ? '输出为免安装 EXE 目录，首次运行可能被 SmartScreen 拦截。'
+        : build.installer ? '首次在 Mac 启动会先运行安装程序。' : '首次在 Mac 启动需初始化 Wine 环境。';
       modalRoot.innerHTML = `
         <div class="modal-scrim" data-action="modal-backdrop">
           <div class="modal" role="dialog" aria-modal="true" aria-labelledby="build-title" tabindex="-1">
             <div class="modal-head">
               ${iconHtml(app)}
-              <div class="modal-title"><h3 id="build-title">${build.installer ? '打包安装器' : '转换'} ${esc(app.name)}</h3><p>${build.installer ? '实验性安装器模式 · 首次启动在 Wine 中安装目标程序' : `${esc(analysis?.reasonSummary || '')} · 兼容性 ${analysis?.grade || '—'} · ${esc(GRADE_LABEL[analysis?.grade] || '')}`}</p></div>
+              <div class="modal-title"><h3 id="build-title">${title} ${esc(app.name)}</h3><p>${subtitle}</p></div>
               <button class="drawer-close" data-action="close-modal" aria-label="关闭"><svg class="icon"><use href="#i-close"></use></svg></button>
             </div>
             <div class="modal-body">
@@ -909,7 +992,7 @@
               <div class="installer-settings">
                 <div class="installer-file">
                   <span class="installer-file-icon"><svg class="icon"><use href="#i-package"></use></svg></span>
-                  <div><b>${esc(build.installer.name || build.installer.path?.split(/[\/]/).pop() || '安装包')}</b><span>${esc(build.installer.type.toUpperCase())} · ${fmtBytes(app.estimatedSizeBytes)}</span></div>
+                  <div><b>${esc(build.installer.name || baseName(build.installer.path) || '安装包')}</b><span>${esc(String(build.installer.type || 'exe').toUpperCase())} · ${fmtBytes(app.estimatedSizeBytes)}</span></div>
                 </div>
                 <div class="adv-grid">
                   <label class="adv-field">参数预设
@@ -930,27 +1013,28 @@
                 </label>
                 <p class="adv-note">安装参数会传给安装器；静默参数仅在确认安装器类型后使用。首次安装建议保持交互式。</p>
               </div>` : ''}
-              ${blocked ? '<div class="warning-inline error-inline" style="margin:0 0 16px;"><svg class="icon"><use href="#i-alert"></use></svg><span>该应用属于高风险 / 阻断项。仍可生成 .app，但预计无法完整运行；建议优先寻找官方 Mac 版或使用 Windows 虚拟机。</span></div>' : ''}
-              ${analysis?.gameLikely ? '<div class="warning-inline" style="margin:0 0 16px;background:var(--blue-soft);color:var(--blue);"><svg class="icon"><use href="#i-spark"></use></svg><span>检测到游戏/图形依赖。Mac 端优先使用 Apple GPTK 或 CrossOver 的 D3DMetal；自动模式会按此顺序选择。</span></div>' : ''}
+              ${isMac ? '<div class="warning-inline" style="margin:0 0 16px;"><svg class="icon"><use href="#i-info"></use></svg><span>只会重组 Electron 载荷为 Windows 免安装版，不使用 Wine，也不会内置 Wine 引擎或运行库。</span></div>' : ''}
+              ${blocked && !isMac ? '<div class="warning-inline error-inline" style="margin:0 0 16px;"><svg class="icon"><use href="#i-alert"></use></svg><span>该应用属于高风险 / 阻断项。仍可生成 .app，但预计无法完整运行；建议优先寻找官方 Mac 版或使用 Windows 虚拟机。</span></div>' : ''}
+              ${analysis?.gameLikely && !isMac ? '<div class="warning-inline" style="margin:0 0 16px;background:var(--blue-soft);color:var(--blue);"><svg class="icon"><use href="#i-spark"></use></svg><span>检测到游戏/图形依赖。Mac 端优先使用 Apple GPTK 或 CrossOver 的 D3DMetal；自动模式会按此顺序选择。</span></div>' : ''}
               ${build.recipe ? `<div class="recipe-applied"><span class="recipe-applied-icon"><svg class="icon"><use href="#i-file"></use></svg></span><div><b>${build.recipe.imported ? '已应用移植配方' : '移植配方已导出'}</b><span>${esc(build.recipe.name || app.name)}${build.recipe.notes ? ` · ${esc(build.recipe.notes.length > 110 ? `${build.recipe.notes.slice(0, 107)}…` : build.recipe.notes)}` : ''}${build.recipe.exportedPath ? ` · ${esc(baseName(build.recipe.exportedPath))}` : ''}</span></div></div>` : ''}
-              <div class="mini-label">运行引擎 <span class="opt">决定安装包体积与目标 Mac 的依赖</span></div>
+              ${isMac ? '' : `<div class="mini-label">运行引擎 <span class="opt">决定安装包体积与目标 Mac 的依赖</span></div>
               <div class="engine-options">
                 ${engineOptionHtml('auto', '自动选择', '优先复用 Mac 已装 CrossOver / GPTK / Whisky；缺失时自动下载开源 Wine。', '推荐', 'spark')}
                 ${engineOptionHtml('bundled', '内置 Wine', '把 Wine 11.18（约 184 MB）装进 ZIP，目标 Mac 离线可用。', '', 'package')}
                 ${engineOptionHtml('reuse', '仅复用引擎', '不下载也不内置；目标 Mac 必须已有 CrossOver / GPTK / Whisky / Homebrew Wine。', '', 'link')}
-              </div>
-              ${build.installer ? '' : `<div class="mini-label">打包选项</div>
+              </div>`}
+              ${isMac || build.installer ? '' : `<div class="mini-label">打包选项</div>
               <div class="option-row">
                 <span class="option-icon"><svg class="icon"><use href="#i-cpu"></use></svg></span>
                 <div class="option-text"><b>附带 VC++ 运行库</b><small>检测到依赖时下载微软官方 redist，首次启动自动安装。</small></div>
                 <button class="switch ${build.options.includeRuntimes ? 'on' : ''}" data-toggle-option="includeRuntimes" aria-label="附带 VC++ 运行库" aria-pressed="${build.options.includeRuntimes}"></button>
               </div>`}
-              ${build.installer ? '' : dotnet ? `<div class="option-row">
+              ${isMac || build.installer || !dotnet ? '' : `<div class="option-row">
                 <span class="option-icon"><svg class="icon"><use href="#i-package"></use></svg></span>
                 <div class="option-text"><b>附带 Wine Mono</b><small>用于 .NET Framework 应用，约 83 MB。内置 Gcenx Wine 已自带 Mono；手动引擎或复用 GPTK 时建议保留。</small></div>
                 <button class="switch ${build.options.includeWineMono ? 'on' : ''}" data-toggle-option="includeWineMono" aria-label="附带 Wine Mono" aria-pressed="${build.options.includeWineMono}"></button>
-              </div>` : ''}
-              ${build.installer ? '' : `<div class="option-row">
+              </div>`}
+              ${isMac || build.installer ? '' : `<div class="option-row">
                 <span class="option-icon"><svg class="icon"><use href="#i-folder"></use></svg></span>
                 <div class="option-text"><b>包含用户数据</b><small>复制 AppData 中与这个应用同名的设置目录，可能包含个人数据。</small></div>
                 <button class="switch ${build.options.includeUserData ? 'on' : ''}" data-toggle-option="includeUserData" aria-label="包含用户数据" aria-pressed="${build.options.includeUserData}"></button>
@@ -961,7 +1045,7 @@
                 <input type="text" id="output-path" value="${esc(build.options.outputDir)}" readonly aria-label="输出目录">
                 <button class="btn btn-soft btn-sm" data-action="pick-output">更改</button>
               </div>
-              <div class="manual-engine">
+              ${isMac ? '' : `<div class="manual-engine">
                 <button class="link-btn" data-action="pick-engine-archive">已有 Wine 引擎 tar.xz？手动选择</button>
                 ${build.options.manualEngineArchive ? `<code title="${esc(build.options.manualEngineArchive)}">${esc(build.options.manualEngineArchive.split(/[\\/]/).pop())}</code>` : ''}
               </div>
@@ -992,30 +1076,42 @@
                   </label>
                   <p class="adv-note">这些选项会写入 macOS 启动器；Metal HUD 与 DXVK HUD 需要对应引擎支持。自定义环境变量优先于默认值。</p>
                 </div>
-              </details>
+              </details>`}
             </div>
             <div class="modal-foot">
-              <div class="foot-note">${build.installer ? '原始安装包不做修改。' : '原始 Windows 文件不做修改。'}${estimate ? `预计 ZIP 约 ${fmtBytes(estimate)}（含运行时估算）。` : 'ZIP 大小取决于应用体积。'}<br>${build.installer ? '首次在 Mac 启动会先运行安装程序。' : '首次在 Mac 启动需初始化 Wine 环境。'}</div>
+              <div class="foot-note">${footNote}<br>${footNote2}</div>
               <div class="modal-foot-actions">
-                <button class="btn btn-ghost btn-sm" data-action="export-recipe" title="把当前引擎、运行库与高级选项保存为可分享的 JSON"><svg class="icon"><use href="#i-file"></use></svg>导出配方</button>
+                ${isMac ? '' : '<button class="btn btn-ghost btn-sm" data-action="export-recipe" title="把当前引擎、运行库与高级选项保存为可分享的 JSON"><svg class="icon"><use href="#i-file"></use></svg>导出配方</button>'}
                 <button class="btn btn-ghost" data-action="close-modal">取消</button>
-                <button class="btn btn-accent" data-action="start-build"><svg class="icon"><use href="#i-play"></use></svg>开始打包</button>
+                <button class="btn btn-accent" data-action="start-build"><svg class="icon"><use href="#i-play"></use></svg>${isMac ? '开始转换' : '开始打包'}</button>
               </div>
             </div>
           </div>
         </div>`;
       syncOverlayLock();
-      requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
+      if (advancedOpen) {
+        const box = modalRoot.querySelector('.advanced-box');
+        if (box) box.open = true;
+      }
+      if (modalBodyScroll) {
+        const body = modalRoot.querySelector('.modal-body');
+        if (body) body.scrollTop = modalBodyScroll;
+      }
+      modalRoot.dataset.step = build.step;
+      if (!hadModal || previousStep !== build.step) requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
       return;
     }
     if (build.step === 'progress') {
-      const stageIndex = STAGE_DEFS.findIndex(([stage]) => stage === STAGE_ALIAS[build.stage]);
+      const isMacBuild = app.platform === 'mac';
+      const stageDefs = isMacBuild ? MAC_STAGE_DEFS : STAGE_DEFS;
+      const stageAlias = isMacBuild ? MAC_STAGE_ALIAS : STAGE_ALIAS;
+      const stageIndex = stageDefs.findIndex(([stage]) => stage === stageAlias[build.stage]);
       modalRoot.innerHTML = `
         <div class="modal-scrim">
           <div class="modal" role="dialog" aria-modal="true" aria-label="正在打包" tabindex="-1">
             <div class="modal-head">
               ${iconHtml(app)}
-              <div class="modal-title"><h3>正在生成 macOS 安装包</h3><p>${esc(app.name)} · 原文件只读复制中</p></div>
+              <div class="modal-title"><h3>${isMacBuild ? '正在生成 Windows 免安装包' : '正在生成 macOS 安装包'}</h3><p>${esc(app.name)} · ${isMacBuild ? 'Electron 载荷重组中' : '原文件只读复制中'}</p></div>
             </div>
             <div class="modal-body">
               <div class="progress-hero">
@@ -1026,18 +1122,19 @@
                 <div class="progress-bar"><i id="b-progress-bar" style="width:${build.progress}%"></i></div>
               </div>
               <div class="stage-list" id="b-stage-list">
-                ${STAGE_DEFS.map(([stage, label], index) => `
+                ${stageDefs.map(([stage, label], index) => `
                   <div class="stage-item ${index < stageIndex ? 'done' : index === stageIndex ? 'active' : ''}" data-stage="${stage}">
                     <span class="stage-dot">${index < stageIndex ? '✓' : ''}</span>${label}
                   </div>`).join('')}
               </div>
               <div class="log-box" id="b-log">${build.log.slice(-10).map((line) => `<span class="log-stage">[${esc(line.stage)}]</span> <span class="log-msg">${esc(line.message)}</span>`).join('\n')}</div>
-              <div class="progress-note"><svg class="icon"><use href="#i-info"></use></svg>大应用复制与压缩可能需要数分钟，请保持窗口打开。</div>
+              <div class="progress-note"><svg class="icon"><use href="#i-info"></use></svg>${isMacBuild ? 'Electron 运行时下载与载荷复制可能需要数分钟，请保持窗口打开。' : '大应用复制与压缩可能需要数分钟，请保持窗口打开。'}</div>
             </div>
           </div>
         </div>`;
       syncOverlayLock();
-      requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
+      modalRoot.dataset.step = build.step;
+      if (!hadModal || previousStep !== build.step) requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
       return;
     }
     if (build.step === 'done') {
@@ -1059,7 +1156,7 @@
                   <div class="done-stat"><b>${esc(result.engine?.version || (isWindows ? 'Electron' : 'Wine'))}</b><span>运行引擎</span></div>
                 </div>
                 <div class="done-path"><svg class="icon"><use href="#i-folder"></use></svg><code title="${esc(result.folderPath)}">${esc(result.folderPath)}</code></div>
-                ${result.warnings?.length ? `<div class="warning-inline" style="text-align:left;max-width:540px;margin:0 auto 14px;"><svg class="icon"><use href="#i-alert"></use></svg><span>打包过程中有 ${result.warnings.length} 条警告，已写入使用说明。大体积或系统级应用请先在 Mac 上验证。</span></div>` : ''}
+                ${result.warnings?.length ? `<div class="warning-inline" style="text-align:left;max-width:540px;margin:0 auto 14px;"><svg class="icon"><use href="#i-alert"></use></svg><span>打包过程中有 ${result.warnings.length} 条警告，已写入使用说明。大体积或系统级应用请先在 ${isWindows ? 'Windows' : 'Mac'} 上验证。</span></div>` : ''}
                 <div class="done-actions">
                   <button class="btn btn-ghost" data-action="show-zip">在文件夹中显示</button>
                   <button class="btn btn-primary" data-action="open-output"><svg class="icon"><use href="#i-folder"></use></svg>打开输出目录</button>
@@ -1072,7 +1169,8 @@
           </div>
         </div>`;
       syncOverlayLock();
-      requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
+      modalRoot.dataset.step = build.step;
+      if (!hadModal || previousStep !== build.step) requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
       return;
     }
     if (build.step === 'error') {
@@ -1094,7 +1192,8 @@
           </div>
         </div>`;
       syncOverlayLock();
-      requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
+      modalRoot.dataset.step = build.step;
+      if (!hadModal || previousStep !== build.step) requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
     }
   }
 
@@ -1185,16 +1284,18 @@
         </div>
         <div class="section-card">
           <div class="section-card-head"><svg class="icon"><use href="#i-package"></use></svg><div><h2>引擎怎么选</h2><p>工具只负责检测与调用；Apple GPTK 与 CrossOver 的二进制不会被重新分发。</p></div></div>
-          <table class="engine-table">
-            <thead><tr><th>运行时</th><th>常规应用</th><th>游戏 / DX</th><th>反作弊</th><th>分发与许可</th></tr></thead>
-            <tbody>
-              <tr><td>内置 Wine 11.18</td><td class="ok">好</td><td class="mid">需 DXVK / 有限</td><td class="no">不可</td><td>Gcenx 构建，LGPL；约 184 MB</td></tr>
-              <tr><td>CrossOver 24+</td><td class="ok">好</td><td class="ok">D3DMetal</td><td class="no">不可</td><td>商业许可，需用户自装</td></tr>
-              <tr><td>Apple GPTK 2/3</td><td class="mid">部分</td><td class="ok">最佳</td><td class="no">不可</td><td>Apple 专有，不可再分发</td></tr>
-              <tr><td>Whisky（活跃 fork）</td><td class="ok">好</td><td class="mid">取决于引擎</td><td class="no">不可</td><td>GPL-3.0，需用户自装</td></tr>
-              <tr><td>Windows 虚拟机</td><td class="ok">完整</td><td class="mid">ARM 性能有限</td><td class="mid">可能，但有风险</td><td>UTM / Parallels，资源开销大</td></tr>
-            </tbody>
-          </table>
+          <div class="table-scroll">
+            <table class="engine-table">
+              <thead><tr><th>运行时</th><th>常规应用</th><th>游戏 / DX</th><th>反作弊</th><th>分发与许可</th></tr></thead>
+              <tbody>
+                <tr><td>内置 Wine 11.18</td><td class="ok">好</td><td class="mid">需 DXVK / 有限</td><td class="no">不可</td><td>Gcenx 构建，LGPL；约 184 MB</td></tr>
+                <tr><td>CrossOver 24+</td><td class="ok">好</td><td class="ok">D3DMetal</td><td class="no">不可</td><td>商业许可，需用户自装</td></tr>
+                <tr><td>Apple GPTK 2/3</td><td class="mid">部分</td><td class="ok">最佳</td><td class="no">不可</td><td>Apple 专有，不可再分发</td></tr>
+                <tr><td>Whisky（活跃 fork）</td><td class="ok">好</td><td class="mid">取决于引擎</td><td class="no">不可</td><td>GPL-3.0，需用户自装</td></tr>
+                <tr><td>Windows 虚拟机</td><td class="ok">完整</td><td class="mid">ARM 性能有限</td><td class="mid">可能，但有风险</td><td>UTM / Parallels，资源开销大</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
         <div class="section-card">
           <div class="section-card-head"><svg class="icon"><use href="#i-shield"></use></svg><div><h2>“无损”到底指什么</h2><p>我们保留所有可保留的东西，也不把兼容性说成 100%。</p></div></div>
@@ -1263,15 +1364,15 @@
             <p>打包时自动准备目标 Mac 需要的兼容组件。</p>
             <div class="settings-toggle">
               <div class="option-text"><b>附带 VC++ 运行库</b><small>检测到依赖时下载微软官方 redist；构建时联网。</small></div>
-              <button class="switch ${s.includeRuntimes !== false ? 'on' : ''}" data-setting-toggle="includeRuntimes" aria-label="附带 VC++ 运行库"></button>
+              <button class="switch ${s.includeRuntimes !== false ? 'on' : ''}" data-setting-toggle="includeRuntimes" aria-label="附带 VC++ 运行库" aria-pressed="${s.includeRuntimes !== false}"></button>
             </div>
             <div class="settings-toggle">
               <div class="option-text"><b>附带 Wine Mono</b><small>为 .NET Framework 应用准备 Mono，约 83 MB。</small></div>
-              <button class="switch ${s.includeWineMono !== false ? 'on' : ''}" data-setting-toggle="includeWineMono" aria-label="附带 Wine Mono"></button>
+              <button class="switch ${s.includeWineMono !== false ? 'on' : ''}" data-setting-toggle="includeWineMono" aria-label="附带 Wine Mono" aria-pressed="${s.includeWineMono !== false}"></button>
             </div>
             <div class="settings-toggle">
               <div class="option-text"><b>默认包含用户数据</b><small>复制 AppData 中的同名配置目录；可能包含隐私信息。</small></div>
-              <button class="switch ${s.includeUserData ? 'on' : ''}" data-setting-toggle="includeUserData" aria-label="默认包含用户数据"></button>
+              <button class="switch ${s.includeUserData ? 'on' : ''}" data-setting-toggle="includeUserData" aria-label="默认包含用户数据" aria-pressed="${Boolean(s.includeUserData)}"></button>
             </div>
           </section>
 
@@ -1404,16 +1505,21 @@
 
   async function clearCache(keys) {
     const selected = (keys || []).filter(Boolean);
-    if (!selected.length || !api.clearCache) return;
+    if (!selected.length || !api.clearCache || state.cacheLoading) return;
+    state.cacheLoading = true;
+    state.cacheError = null;
+    renderCacheRegion();
     try {
       const result = await api.clearCache(selected);
       if (!result) return;
       state.cacheStats = result.stats || state.cacheStats;
-      renderCacheRegion();
       if (result.clearedBytes) toast(`已清理 ${fmtBytes(result.clearedBytes)} 缓存`, 'success');
       else toast('选中的缓存已经是空的', 'info');
     } catch (error) {
       toast(`清理缓存失败：${error.message}`, 'error');
+    } finally {
+      state.cacheLoading = false;
+      if (state.page === 'settings') renderCacheRegion();
     }
   }
 
@@ -1520,7 +1626,7 @@
     updateChrome();
     try {
       const result = await api.scanApps();
-      const manualApps = state.apps.filter((item) => item.source === 'manual' || item.source === 'archive');
+      const manualApps = state.apps.filter((item) => item.platform === 'mac' || item.source === 'manual' || item.source === 'archive');
       const scannedApps = (result.apps || []).map((app) => ({ ...app }));
       const scannedIds = new Set(scannedApps.map((app) => app.id));
       state.apps = [...manualApps.filter((app) => !scannedIds.has(app.id)), ...scannedApps];
@@ -1591,8 +1697,24 @@
     }
   }
 
+  function concurrentImportBlocked() {
+    if (state.build || state.batch) {
+      toast('请先完成当前任务', 'warn');
+      return true;
+    }
+    if (state.archiveImporting) {
+      toast('已有导入任务正在进行，请稍候', 'warn');
+      return true;
+    }
+    return false;
+  }
+
   function pickExe() {
-    if (!api.pickExe) return;
+    if (!api.pickExe) {
+      toast('当前环境不支持选择 .exe', 'warn');
+      return;
+    }
+    if (concurrentImportBlocked()) return;
     api.pickExe().then((result) => {
       if (!result?.app) return;
       const app = result.app;
@@ -1617,29 +1739,110 @@
     selectApp(app.id);
   }
 
-  async function saveAiSettings() {
+  function readAiPatch() {
     const baseUrl = $('#ai-base-url')?.value.trim() || '';
     const model = $('#ai-model')?.value.trim() || '';
-    const keyInput = $('#ai-key');
+    const key = $('#ai-key')?.value.trim() || '';
     const patch = { ai: { baseUrl, model } };
-    if (keyInput?.value.trim()) patch.ai.apiKey = keyInput.value.trim();
+    if (key) patch.ai.apiKey = key;
     if ($('#ai-clear-key')?.checked) patch.ai.clearKey = true;
+    return patch;
+  }
+
+  function validAiBaseUrl(value) {
     try {
-      state.settings = await api.setSettings(patch);
+      const url = new URL(value);
+      return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  function aiPatchError(patch, requireKey = false) {
+    if (patch.ai.baseUrl && !validAiBaseUrl(patch.ai.baseUrl)) return 'Base URL 必须是有效的 http:// 或 https:// 地址';
+    if (patch.ai.clearKey && patch.ai.apiKey) return '已填写新的 API Key，请先取消勾选「清除已保存的 Key」';
+    if (requireKey) {
+      const hasSaved = Boolean(state.settings?.ai?.hasKey);
+      if (patch.ai.clearKey || (!patch.ai.apiKey && !hasSaved)) return '请先填写 API Key，再测试连接';
+    }
+    return '';
+  }
+
+  function setAiBusy(busy) {
+    aiBusy = busy;
+    for (const selector of ['[data-action="save-ai"]', '[data-action="test-ai"]']) {
+      const button = document.querySelector(selector);
+      if (button) button.disabled = busy;
+    }
+  }
+
+  async function saveAiSettings() {
+    if (aiBusy) return;
+    const patch = readAiPatch();
+    const keyInput = $('#ai-key');
+    const error = aiPatchError(patch);
+    if (error) {
+      toast(error, 'warn');
+      return;
+    }
+    setAiBusy(true);
+    try {
+      applySavedSettings(await api.setSettings(patch));
       if (keyInput) keyInput.value = '';
-      renderSettings();
+      if (state.page === 'settings') {
+        renderSettings();
+        requestAnimationFrame(() => document.querySelector('[data-action="save-ai"]')?.focus());
+      }
       toast('AI 接口设置已保存', 'success');
-    } catch (error) {
-      toast(error.message, 'error');
+    } catch (saveError) {
+      toast(saveError.message, 'error');
+    } finally {
+      setAiBusy(false);
     }
   }
 
   async function testAiSettings() {
+    if (state.demo) {
+      toast('演示模式不会连接真实 AI 接口', 'info');
+      return;
+    }
+    if (aiBusy) return;
+    if (!api.aiTest) {
+      toast('当前环境不支持测试 AI 连接', 'warn');
+      return;
+    }
+    const patch = readAiPatch();
+    const keyInput = $('#ai-key');
+    const error = aiPatchError(patch, true);
+    if (error) {
+      toast(error, 'warn');
+      return;
+    }
+    setAiBusy(true);
     try {
-      const result = await api.aiTest();
-      toast(`连接成功：${result.latencyMs} ms${result.reply ? ` · ${result.reply}` : ''}`, 'success');
-    } catch (error) {
-      toast(`连接失败：${error.message}`, 'error');
+      try {
+        applySavedSettings(await api.setSettings(patch));
+        if (keyInput) keyInput.value = '';
+      } catch (saveError) {
+        toast(`保存 AI 设置失败：${saveError.message}`, 'error');
+        return;
+      }
+      try {
+        const result = await api.aiTest();
+        if (state.page === 'settings') {
+          renderSettings();
+          requestAnimationFrame(() => document.querySelector('[data-action="test-ai"]')?.focus());
+        }
+        toast(`连接成功：${result.latencyMs} ms${result.reply ? ` · ${result.reply}` : ''}`, 'success');
+      } catch (testError) {
+        if (state.page === 'settings') {
+          renderSettings();
+          requestAnimationFrame(() => document.querySelector('[data-action="test-ai"]')?.focus());
+        }
+        toast(`连接失败：${testError.message}`, 'error');
+      }
+    } finally {
+      setAiBusy(false);
     }
   }
 
@@ -1648,10 +1851,7 @@
       toast('当前环境不支持导入 macOS 应用', 'warn');
       return;
     }
-    if (state.build || state.batch) {
-      toast('请先完成当前任务', 'warn');
-      return;
-    }
+    if (concurrentImportBlocked()) return;
     try {
       const picked = await api.pickMacApp();
       if (!picked) return;
@@ -1676,16 +1876,30 @@
     }
   }
 
+  function closeAiPanel() {
+    const panel = aiPanel;
+    if (!panel) return;
+    aiPanel = null;
+    if (panel.unsubscribe) {
+      panel.unsubscribe();
+      panel.unsubscribe = null;
+    }
+    panel.overlay.remove();
+    modalRoot.inert = false;
+    if (panel.previousFocus?.isConnected) panel.previousFocus.focus();
+  }
+
   async function openAiFixPanel(buildId) {
     if (!buildId) {
       toast('缺少构建记录，无法修复', 'warn');
       return;
     }
-    if (aiPanel) aiPanel.overlay.remove();
+    closeAiPanel();
+    const previousFocus = document.activeElement;
     const overlay = document.createElement('div');
     overlay.className = 'ai-overlay';
     overlay.innerHTML = `
-      <div class="ai-panel" role="dialog" aria-label="AI 修复">
+      <div class="ai-panel" role="dialog" aria-modal="true" aria-label="AI 修复">
         <header><b>AI 修复</b><span class="ai-sub">读取诊断 → 修改配置 → 重新构建</span><button class="icon-btn" data-ai-close aria-label="关闭">✕</button></header>
         <div class="ai-toolbar">
           <button class="btn btn-ghost btn-sm" data-ai-diagnostics>导入 Mac 诊断 ZIP</button>
@@ -1696,48 +1910,77 @@
         <footer class="ai-foot"></footer>
       </div>`;
     document.body.appendChild(overlay);
-    aiPanel = { overlay, log: overlay.querySelector('.ai-log'), foot: overlay.querySelector('.ai-foot'), diagnosticsPath: '' };
-    overlay.querySelector('[data-ai-close]').onclick = () => { overlay.remove(); aiPanel = null; };
+    const panel = {
+      overlay,
+      log: overlay.querySelector('.ai-log'),
+      foot: overlay.querySelector('.ai-foot'),
+      diagnosticsPath: '',
+      unsubscribe: null,
+      previousFocus,
+    };
+    aiPanel = panel;
+    modalRoot.inert = true;
+    const closeBtn = overlay.querySelector('[data-ai-close]');
+    closeBtn.onclick = closeAiPanel;
     const diagBtn = overlay.querySelector('[data-ai-diagnostics]');
     diagBtn.onclick = async () => {
+      if (!api.aiPickDiagnostics) {
+        aiStatusLine('当前环境不支持导入诊断包');
+        return;
+      }
+      if (diagBtn.disabled) return;
+      diagBtn.disabled = true;
       try {
         const picked = await api.aiPickDiagnostics();
-        if (!picked) return;
-        aiPanel.diagnosticsPath = picked.dir;
+        if (!picked || aiPanel !== panel) return;
+        panel.diagnosticsPath = picked.dir;
         aiStatusLine(`已载入诊断包：${picked.dir}`);
         diagBtn.textContent = '已载入诊断包';
       } catch (error) {
+        if (aiPanel !== panel) return;
         aiStatusLine(`诊断包读取失败：${error.message}`);
+      } finally {
+        if (diagBtn.isConnected) diagBtn.disabled = false;
       }
     };
     overlay.querySelector('[data-ai-run]').onclick = async (event) => {
+      if (!api.aiFix) {
+        aiStatusLine('当前环境不支持 AI 修复');
+        return;
+      }
       const button = event.currentTarget;
       const allowRebuild = overlay.querySelector('[data-ai-rebuild]').checked;
       button.disabled = true;
+      panel.foot.innerHTML = '';
       aiStatusLine('正在请求模型…');
       const unsubscribe = api.onAiEvent ? api.onAiEvent((data) => {
-        if (!aiPanel) return;
+        if (aiPanel !== panel) return;
         if (data.type === 'tool') aiStatusLine(`→ ${data.name} ${JSON.stringify(data.arguments || {}).slice(0, 200)}`);
         else if (data.type === 'toolResult') aiStatusLine(`  ${String(data.result || '').split('\n').slice(0, 3).join(' / ').slice(0, 300)}`);
         else if (data.type === 'assistant') aiStatusLine(`模型：${String(data.content || '').slice(0, 400)}`);
         else if (data.type === 'progress') aiStatusLine(`  [${data.stage}] ${data.message || ''}`);
         else if (data.type === 'step') aiStatusLine(`—— 第 ${data.step}/${data.maxSteps} 步 ——`);
       }) : () => {};
+      panel.unsubscribe = unsubscribe;
       try {
         const result = await api.aiFix({
           buildId,
-          diagnosticsPath: aiPanel.diagnosticsPath || undefined,
+          diagnosticsPath: panel.diagnosticsPath || undefined,
           maxSteps: allowRebuild ? 8 : 5,
         });
+        if (aiPanel !== panel) return;
         aiStatusLine('完成');
-        aiPanel.foot.innerHTML = `<div class="ai-summary">${esc(result.summary || '模型未给出总结')}</div>`;
+        panel.foot.innerHTML = `<div class="ai-summary">${esc(result.summary || '模型未给出总结')}</div>`;
       } catch (error) {
+        if (aiPanel !== panel) return;
         aiStatusLine(`失败：${error.message}`);
       } finally {
+        if (panel.unsubscribe === unsubscribe) panel.unsubscribe = null;
         unsubscribe();
-        button.disabled = false;
+        if (button.isConnected) button.disabled = false;
       }
     };
+    requestAnimationFrame(() => closeBtn.focus());
   }
 
   async function pickArchive() {
@@ -1745,16 +1988,15 @@
       toast('当前环境不支持导入压缩包', 'warn');
       return;
     }
-    if (state.build || state.batch) {
-      toast('请先完成当前任务', 'warn');
-      return;
-    }
+    if (concurrentImportBlocked()) return;
     if (state.page !== 'library') state.page = 'library';
+    state.archiveImporting = true;
     state.archiveProgress = { message: '请选择应用目录 ZIP…', files: 0 };
     renderPage();
     try {
       const result = await api.pickArchive();
       if (!result?.app) return;
+      if (state.page !== 'library') state.page = 'library';
       const app = result.app;
       app.analysis = result.analysis || app.analysis;
       app.fullAnalysis = true;
@@ -1776,6 +2018,7 @@
     } catch (error) {
       toast(error.message, 'error');
     } finally {
+      state.archiveImporting = false;
       if (state.archiveProgress) {
         state.archiveProgress = null;
         if (state.page === 'library') renderPage();
@@ -1788,6 +2031,7 @@
       toast('当前环境不支持安装包模式', 'warn');
       return;
     }
+    if (concurrentImportBlocked()) return;
     try {
       const result = await api.pickInstaller();
       if (!result?.app) return;
@@ -1836,6 +2080,11 @@
       toast('当前环境不支持拖拽导入', 'warn');
       return;
     }
+    if (state.archiveImporting) {
+      toast('已有导入任务正在进行，请稍候', 'warn');
+      return;
+    }
+    state.archiveImporting = true;
     toast('正在识别拖入的内容…', 'info');
     try {
       const result = await api.inspectPath(target);
@@ -1872,7 +2121,15 @@
       state.archiveProgress = null;
       if (state.page === 'library') updateScanBanner();
       toast(`无法导入：${error.message}`, 'error');
+    } finally {
+      state.archiveImporting = false;
     }
+  }
+
+  function dropRejectedMessage() {
+    if (state.build || state.batch) return '请先完成或关闭当前窗口，再拖入新的应用';
+    if (state.selectedId) return '请先关闭应用详情，再拖入新的应用';
+    return '请先切换到应用库，再拖入应用';
   }
 
   function bindDragAndDrop() {
@@ -1900,7 +2157,7 @@
       const file = event.dataTransfer?.files?.[0];
       if (!file) return;
       if (!canAcceptDrop()) {
-        toast('请先关闭当前窗口，再拖入新的应用', 'info');
+        toast(dropRejectedMessage(), 'info');
         return;
       }
       const target = api.pathForFile ? api.pathForFile(file) : file.name;
@@ -1910,10 +2167,16 @@
     window.addEventListener('blur', resetDropOverlay);
   }
 
-  function toggleBatchMode() {    state.batchMode = !state.batchMode;
+  function focusBatchToggle() {
+    requestAnimationFrame(() => document.querySelector('[data-action="toggle-batch"]')?.focus());
+  }
+
+  function toggleBatchMode() {
+    state.batchMode = !state.batchMode;
     if (!state.batchMode) state.batchSelected.clear();
     renderLibrary();
     updateChrome();
+    focusBatchToggle();
   }
 
   function refreshBatchBar() {
@@ -1926,6 +2189,10 @@
   function toggleBatchApp(id) {
     const app = state.apps.find((item) => item.id === id);
     if (!app) return;
+    if (app.platform === 'mac') {
+      toast('macOS 应用暂不支持批量转换', 'warn');
+      return;
+    }
     if (!app.exePath) {
       toast('该应用没有可启动的 .exe，无法批量转换', 'warn');
       return;
@@ -1936,6 +2203,7 @@
     if (row) {
       const selected = state.batchSelected.has(id);
       row.classList.toggle('selected', selected);
+      row.setAttribute('aria-pressed', String(selected));
       const check = row.querySelector('.row-check');
       if (check) {
         check.classList.toggle('on', selected);
@@ -1947,7 +2215,7 @@
 
   function batchSelectAll() {
     for (const app of filteredApps()) {
-      if (app.exePath) state.batchSelected.add(app.id);
+      if (app.exePath && app.platform !== 'mac') state.batchSelected.add(app.id);
     }
     updateList();
     refreshBatchBar();
@@ -1958,6 +2226,7 @@
     state.batchSelected.clear();
     renderLibrary();
     updateChrome();
+    focusBatchToggle();
   }
 
   function batchLocalProgress(event, current) {
@@ -2005,10 +2274,13 @@
     const batch = state.batch;
     if (!batch) {
       modalRoot.innerHTML = '';
+      delete modalRoot.dataset.done;
       syncOverlayLock();
       return;
     }
     const done = !batch.active;
+    const hadModal = Boolean(modalRoot.querySelector('.batch-modal'));
+    const wasDone = modalRoot.dataset.done === '1';
     const current = batch.items[batch.index];
     const completed = batch.items.filter((item) => item.status === 'done').length;
     const failed = batch.items.filter((item) => item.status === 'error').length;
@@ -2049,13 +2321,15 @@
         </div>
       </div>`;
     syncOverlayLock();
-    requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
+    modalRoot.dataset.done = done ? '1' : '0';
+    if (!hadModal || wasDone !== done) requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
   }
 
   function stopBatch() {
     if (!state.batch?.active || state.batch.cancelled) return;
     state.batch.cancelled = true;
     renderBatchModal();
+    requestAnimationFrame(() => modalRoot.querySelector('.modal')?.focus());
     toast('将在当前应用完成后停止剩余任务', 'info');
   }
 
@@ -2063,15 +2337,18 @@
     if (!state.batch || state.batch.active) return;
     state.batch = null;
     modalRoot.innerHTML = '';
+    delete modalRoot.dataset.done;
+    delete modalRoot.dataset.step;
     state.batchMode = false;
     state.batchSelected.clear();
     syncOverlayLock();
     updateChrome();
     renderPage();
+    focusBatchToggle();
   }
 
   async function startBatch() {
-    const apps = state.apps.filter((app) => state.batchSelected.has(app.id) && app.exePath);
+    const apps = state.apps.filter((app) => state.batchSelected.has(app.id) && app.exePath && app.platform !== 'mac');
     if (!apps.length) {
       toast('请先选择至少一个可转换的应用', 'warn');
       return;
@@ -2111,11 +2388,11 @@
           app: item.app,
           services: state.services,
           outputDir,
-          engineMode: state.settings.engineMode,
-          includeRuntimes: state.settings.includeRuntimes,
-          includeWineMono: state.settings.includeWineMono,
+          engineMode: state.settings?.engineMode,
+          includeRuntimes: state.settings?.includeRuntimes,
+          includeWineMono: state.settings?.includeWineMono,
           includeUserData: false,
-          proxy: state.settings.proxy,
+          proxy: state.settings?.proxy,
           advanced: {},
         });
         item.status = 'done';
@@ -2136,12 +2413,7 @@
       }
     }
     state.batch.active = false;
-    try {
-      state.history = await api.history();
-    } catch {
-      /* history refresh is best-effort */
-    }
-    updateChrome();
+    await refreshHistoryQuiet();
     renderBatchModal();
     const failed = state.batch.items.filter((item) => item.status === 'error').length;
     const completed = state.batch.items.filter((item) => item.status === 'done').length;
@@ -2151,8 +2423,13 @@
   async function startBuild() {
     const build = state.build;
     if (!build) return;
+    if (build.step === 'progress') return;
     if (!build.options.outputDir) {
       toast('请选择输出目录', 'warn');
+      return;
+    }
+    if (build.app?.platform === 'mac' && !api.buildWindowsApp) {
+      toast('当前环境不支持 Mac → Windows 转换', 'warn');
       return;
     }
     build.step = 'progress';
@@ -2173,8 +2450,7 @@
         build.result = result;
         build.step = 'done';
         build.progress = 100;
-        state.history = await api.history();
-        updateChrome();
+        await refreshHistoryQuiet();
         renderModal();
         if (state.page === 'tasks') renderTasks();
         toast('已生成 Windows 免安装包', 'success');
@@ -2205,15 +2481,15 @@
         engineMode: build.options.engineMode,
         includeRuntimes: build.options.includeRuntimes,
         includeWineMono: build.options.includeWineMono,
-        includeUserData: build.options.includeUserData,
+        includeUserData: build.installer ? false : build.options.includeUserData,
+        proxy: state.settings?.proxy,
       };
-      state.settings = await api.setSettings(patch);
+      applySavedSettings(await api.setSettings(patch));
       const result = await api.startBuild(payload);
       build.result = result;
       build.step = 'done';
       build.progress = 100;
-      state.history = await api.history();
-      updateChrome();
+      await refreshHistoryQuiet();
       renderModal();
       if (state.page === 'tasks') renderTasks();
       toast('打包完成，已生成 .app 与 ZIP', 'success');
@@ -2228,7 +2504,8 @@
     const build = state.build;
     if (!build) return 0;
     if (state.demo) return Math.max(build.progress, Math.min(100, Number(event.percent) || 0));
-    const range = STAGE_RANGE[event.stage];
+    const isMac = state.build?.app?.platform === 'mac';
+    const range = (isMac ? MAC_STAGE_RANGE : STAGE_RANGE)[event.stage];
     if (!range) return build.progress;
     const stagePercent = Number.isFinite(Number(event.percent)) ? Math.min(100, Math.max(0, Number(event.percent))) : 0;
     const overall = range[0] + ((range[1] - range[0]) * stagePercent) / 100;
@@ -2238,11 +2515,14 @@
   function handleBuildProgress(event) {
     const build = state.build;
     if (!build || build.step !== 'progress') return;
+    const isMac = build.app?.platform === 'mac';
+    const stageDefs = isMac ? MAC_STAGE_DEFS : STAGE_DEFS;
+    const stageAlias = isMac ? MAC_STAGE_ALIAS : STAGE_ALIAS;
     build.progress = buildOverall(event);
     build.stage = event.stage || build.stage;
     build.message = event.message || build.message;
-    const alias = STAGE_ALIAS[event.stage];
-    const stageDef = STAGE_DEFS.find(([stage]) => stage === alias);
+    const alias = stageAlias[event.stage];
+    const stageDef = stageDefs.find(([stage]) => stage === alias);
     build.stageLabel = stageDef ? stageDef[1] : build.stageLabel;
     const last = build.log[build.log.length - 1];
     if (event.message && (!last || last.stage !== event.stage || last.message !== event.message)) {
@@ -2257,7 +2537,7 @@
     if (stageEl) stageEl.textContent = build.stageLabel || '处理中';
     const messageEl = $('#b-progress-message');
     if (messageEl) messageEl.textContent = event.message || '';
-    const stageIndex = STAGE_DEFS.findIndex(([stage]) => stage === alias);
+    const stageIndex = stageDefs.findIndex(([stage]) => stage === alias);
     $$('#b-stage-list .stage-item').forEach((item, index) => {
       item.classList.toggle('done', index < stageIndex);
       item.classList.toggle('active', index === stageIndex);
@@ -2303,10 +2583,19 @@
       if (state.build) {
         state.build.options.outputDir = selected;
         state.settings = { ...state.settings, outputDir: selected };
+        try {
+          applySavedSettings(await api.setSettings({ outputDir: selected }));
+        } catch {
+          /* 开始打包时还会再次保存 */
+        }
         renderModal();
+        requestAnimationFrame(() => modalRoot.querySelector('[data-action="pick-output"]')?.focus());
       } else {
-        state.settings = await api.setSettings({ outputDir: selected });
-        if (state.page === 'settings') renderSettings();
+        applySavedSettings(await api.setSettings({ outputDir: selected }));
+        if (state.page === 'settings') {
+          renderSettings();
+          requestAnimationFrame(() => document.querySelector('[data-action="pick-output"]')?.focus());
+        }
       }
       toast('输出目录已更新');
     } catch (error) {
@@ -2323,6 +2612,7 @@
         state.build.options.manualEngineArchive = file;
         state.build.options.engineMode = 'bundled';
         renderModal();
+        requestAnimationFrame(() => modalRoot.querySelector('[data-action="pick-engine-archive"]')?.focus());
         toast('已选择本地引擎包，将随安装包写入');
       }
     } catch (error) {
@@ -2336,16 +2626,34 @@
       toast('浏览器演示模式不会创建真实文件。', 'warn');
       return;
     }
-    const error = await api.openPath(path);
-    if (typeof error === 'string' && error) toast(error, 'error');
+    try {
+      const error = await api.openPath(path);
+      if (typeof error === 'string' && error) toast(error, 'error');
+    } catch (error) {
+      toast(`无法打开：${error.message}`, 'error');
+    }
   }
 
   async function showInFolder(path) {
+    if (!path) return;
     if (!api.isDesktop) {
       toast('浏览器演示模式不会创建真实文件。', 'warn');
       return;
     }
-    if (path) await api.showInFolder(path);
+    try {
+      await api.showInFolder(path);
+    } catch (error) {
+      toast(`无法显示文件：${error.message}`, 'error');
+    }
+  }
+
+  async function refreshHistoryQuiet() {
+    try {
+      state.history = await api.history();
+    } catch {
+      /* history refresh is best-effort */
+    }
+    updateChrome();
   }
 
   async function clearHistory() {
@@ -2360,11 +2668,18 @@
     }
   }
 
-  async function saveSetting(patch, rerender = false) {
+  function applySavedSettings(next) {
+    if (!next || typeof next !== 'object') return state.settings;
+    state.settings = { ...next, proxy: state.settings?.proxy ?? next.proxy };
+    return state.settings;
+  }
+
+  async function saveSetting(patch, rerender = false, focusSelector = '') {
     try {
-      state.settings = await api.setSettings(patch);
+      applySavedSettings(await api.setSettings(patch));
       if (rerender) {
         if (state.page === 'settings') renderSettings();
+        if (focusSelector) requestAnimationFrame(() => document.querySelector(focusSelector)?.focus());
       }
       toast('设置已保存');
     } catch (error) {
@@ -2374,21 +2689,29 @@
 
   async function saveSettingQuiet(patch) {
     try {
-      state.settings = await api.setSettings(patch);
+      applySavedSettings(await api.setSettings(patch));
     } catch {
       /* 输入过程中的静默保存失败不打断输入 */
     }
   }
 
   async function runDiagnostics() {
+    if (diagnosticsBusy) return;
+    diagnosticsBusy = true;
     const list = $('#diagnostic-list');
+    const button = document.querySelector('[data-action="run-diagnostics"]');
+    if (button) button.disabled = true;
     if (list) list.innerHTML = '<div class="diagnostic"><span class="dot"></span>正在检查…</div>';
     try {
       const result = await api.diagnostics();
-      if (!list) return;
+      if (!list || !list.isConnected) return;
       list.innerHTML = result.checks.map((item) => `<div class="diagnostic ${item.status === 'ok' ? '' : 'warn'}"><span class="dot"></span><span>${esc(item.name)}</span><span class="diag-detail">${esc(item.detail)}</span></div>`).join('');
     } catch (error) {
-      if (list) list.innerHTML = `<div class="diagnostic warn"><span class="dot"></span>检查失败：${esc(error.message)}</div>`;
+      if (list && list.isConnected) list.innerHTML = `<div class="diagnostic warn"><span class="dot"></span>检查失败：${esc(error.message)}</div>`;
+    } finally {
+      diagnosticsBusy = false;
+      const current = document.querySelector('[data-action="run-diagnostics"]');
+      if (current) current.disabled = false;
     }
   }
 
@@ -2510,6 +2833,7 @@
       case 'done-close':
         state.build = null;
         modalRoot.innerHTML = '';
+        delete modalRoot.dataset.step;
         closeDrawer();
         break;
       case 'retry-build':
@@ -2521,7 +2845,7 @@
         }
         break;
       case 'open-output':
-        openPath(state.build?.result?.folderPath || state.batch?.results?.[0]?.folderPath || state.batch?.outputDir || state.build?.options?.outputDir);
+        openPath(state.build?.result?.folderPath || state.batch?.outputDir || state.batch?.results?.[0]?.folderPath || state.build?.options?.outputDir);
         break;
       case 'show-zip':
         showInFolder(element?.dataset?.path || state.build?.result?.zipPath || state.build?.result?.folderPath);
@@ -2556,7 +2880,7 @@
     }
     const external = event.target.closest('[data-external]');
     if (external) {
-      api.openExternal?.(external.dataset.external);
+      api.openExternal?.(external.dataset.external)?.catch?.((error) => toast(error.message, 'error'));
       return;
     }
     const row = event.target.closest('[data-app-id]');
@@ -2582,9 +2906,11 @@
     }
     const engineMode = event.target.closest('[data-engine-mode]');
     if (engineMode && state.build) {
-      state.build.options.engineMode = engineMode.dataset.engineMode;
-      if (state.build.options.engineMode !== 'bundled') state.build.options.manualEngineArchive = '';
+      const mode = engineMode.dataset.engineMode;
+      state.build.options.engineMode = mode;
+      if (mode !== 'bundled') state.build.options.manualEngineArchive = '';
       renderModal();
+      requestAnimationFrame(() => modalRoot.querySelector(`[data-engine-mode="${CSS.escape(mode)}"]`)?.focus());
       return;
     }
     const toggle = event.target.closest('[data-toggle-option]');
@@ -2592,16 +2918,17 @@
       const key = toggle.dataset.toggleOption;
       state.build.options[key] = !state.build.options[key];
       renderModal();
+      requestAnimationFrame(() => modalRoot.querySelector(`[data-toggle-option="${CSS.escape(key)}"]`)?.focus());
       return;
     }
     if (event.target.closest('[data-setting-engine]')) {
       const mode = event.target.closest('[data-setting-engine]').dataset.settingEngine;
-      saveSetting({ engineMode: mode }, true);
+      saveSetting({ engineMode: mode }, true, `[data-setting-engine="${CSS.escape(mode)}"]`);
       return;
     }
     if (event.target.closest('[data-setting-toggle]')) {
       const key = event.target.closest('[data-setting-toggle]').dataset.settingToggle;
-      saveSetting({ [key]: !state.settings[key] }, true);
+      saveSetting({ [key]: !state.settings[key] }, true, `[data-setting-toggle="${CSS.escape(key)}"]`);
       return;
     }
     const actionEl = event.target.closest('[data-action]');
@@ -2613,7 +2940,9 @@
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
-      if (state.build?.open) {
+      if (aiPanel) {
+        closeAiPanel();
+      } else if (state.build?.open) {
         if (state.build.step !== 'progress') closeBuildModal();
       } else if (state.batch) {
         if (!state.batch.active) closeBatch();
@@ -2669,8 +2998,10 @@
       updateList();
     }
     if (event.target.id === 'proxy-input') {
+      const value = event.target.value.trim();
+      state.settings = { ...(state.settings || {}), proxy: value };
       clearTimeout(proxySaveTimer);
-      proxySaveTimer = setTimeout(() => saveSettingQuiet({ proxy: event.target.value.trim() }), 450);
+      proxySaveTimer = setTimeout(() => saveSettingQuiet({ proxy: value }), 450);
     }
     if (event.target.id === 'adv-winedebug' && state.build?.options?.advanced) {
       state.build.options.advanced.wineDebug = event.target.value;
@@ -2695,6 +3026,7 @@
   }
   if (api.onArchiveProgress) {
     api.onArchiveProgress((progress) => {
+      if (!state.archiveImporting) return;
       state.archiveProgress = progress;
       if (state.page === 'library') updateScanBanner();
     });

@@ -386,6 +386,37 @@ test('zip import rejects unsafe paths and finds the app root', async () => {
   }
 });
 
+test('writeZip 失败时删除半成品并释放输出流', async () => {
+  const fs = require('node:fs');
+  const fsp = require('node:fs/promises');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { writeZip } = require('../engine/packager');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'win2mac-writezip-'));
+  try {
+    const source = path.join(root, 'source');
+    fs.mkdirSync(path.join(source, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(source, 'sub', 'ok.txt'), 'ok');
+    fs.writeFileSync(path.join(source, 'sub', 'boom.txt'), 'boom');
+    const zipPath = path.join(root, 'out.zip');
+    const realStat = fsp.stat;
+    fsp.stat = async (file, ...rest) => {
+      if (String(file).endsWith('boom.txt')) throw new Error('模拟读取失败');
+      return realStat.call(fsp, file, ...rest);
+    };
+    try {
+      await assert.rejects(() => writeZip({ rootDir: source, rootName: 'App', zipPath }), /模拟读取失败/);
+    } finally {
+      fsp.stat = realStat;
+    }
+    assert.equal(fs.existsSync(zipPath), false);
+    // 文件句柄已释放时 Windows 才能立即删除目录。
+    fs.rmSync(root, { recursive: true, force: true });
+  } finally {
+    if (fs.existsSync(root)) fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('macOS shell templates brace variables before Unicode text', () => {
   const fs = require('node:fs');
   const path = require('node:path');

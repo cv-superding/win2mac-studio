@@ -45,6 +45,16 @@ let aiRunActive = false;
 let closePromptOpen = false;
 let forceClose = false;
 
+async function withAiLock(task) {
+  if (aiRunActive) throw new Error('已有 AI 修复任务在运行');
+  aiRunActive = true;
+  try {
+    return await task();
+  } finally {
+    aiRunActive = false;
+  }
+}
+
 function appDataDir() {
   return path.join(app.getPath('appData'), 'Win2Mac');
 }
@@ -92,18 +102,20 @@ function publicSettings(settings) {
 }
 
 async function saveSettings(patch) {
+  const source = patch && typeof patch === 'object' ? patch : {};
   const current = await readSettings();
-  const next = { ...current, ...pickSettings(patch) };
-  if (patch?.ai !== undefined) next.ai = normalizeAiSettings(patch.ai, current.ai);
+  const next = { ...current, ...pickSettings(source) };
+  if (source.ai !== undefined && source.ai !== null) next.ai = normalizeAiSettings(source.ai, current.ai);
   await writeJson(settingsFile(), next);
   return next;
 }
 
 function pickSettings(patch = {}) {
+  const source = patch && typeof patch === 'object' ? patch : {};
   const allowed = ['outputDir', 'proxy', 'engineMode', 'includeRuntimes', 'includeUserData', 'includeWineMono'];
   const next = {};
   for (const key of allowed) {
-    if (patch[key] !== undefined) next[key] = patch[key];
+    if (source[key] !== undefined) next[key] = source[key];
   }
   return next;
 }
@@ -157,21 +169,45 @@ async function importDiagnostics(targetPath) {
     await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
     await extractZip(targetPath, dir);
   }
-  let root = dir;
-  const reportCandidate = path.join(dir, 'Report.json');
+  const dirReal = await fsp.realpath(dir).catch(() => '');
+  if (!dirReal) throw new Error('诊断包路径不存在或无法访问');
+  // 诊断目录来自用户/渲染层，所有后续读取都必须落在 realpath 之后的范围里，防止目录联接逃逸。
+  const resolveInside = async (candidate) => {
+    const real = await fsp.realpath(candidate).catch(() => '');
+    return real && isPathInside(real, dirReal) ? real : '';
+  };
+  let root = dirReal;
+  const reportCandidate = path.join(dirReal, 'Report.json');
   if (!fs.existsSync(reportCandidate)) {
-    const entries = await fsp.readdir(dir, { withFileTypes: true }).catch(() => []);
-    const nested = entries.find((entry) => entry.isDirectory() && fs.existsSync(path.join(dir, entry.name, 'Report.json')));
-    if (nested) root = path.join(dir, nested.name);
+    const entries = await fsp.readdir(dirReal, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const nested = path.join(dirReal, entry.name);
+      if (!fs.existsSync(path.join(nested, 'Report.json'))) continue;
+      const nestedReal = await resolveInside(nested);
+      if (nestedReal) {
+        root = nestedReal;
+        break;
+      }
+    }
   }
-  if (!fs.existsSync(path.join(root, 'Report.json'))) throw new Error('诊断包里没有 Report.json，可能不是 Win2Mac 生成的诊断包');
+  const reportReal = await resolveInside(path.join(root, 'Report.json'));
+  const reportStat = reportReal ? await fsp.stat(reportReal).catch(() => null) : null;
+  if (!reportStat?.isFile()) throw new Error('诊断包里没有 Report.json，可能不是 Win2Mac 生成的诊断包');
   let report = null;
-  try { report = JSON.parse(await fsp.readFile(path.join(root, 'Report.json'), 'utf8')); } catch { /* keep null */ }
+  if (reportStat.size <= 4 * 1024 * 1024) {
+    try {
+      report = JSON.parse(await fsp.readFile(reportReal, 'utf8'));
+    } catch { /* keep null */ }
+  }
   const logs = [];
   const logsDir = path.join(root, 'Logs');
   const logEntries = await fsp.readdir(logsDir, { withFileTypes: true }).catch(() => []);
   for (const entry of logEntries) {
-    if (entry.isFile()) logs.push(path.join(logsDir, entry.name));
+    if (logs.length >= 80) break;
+    if (!entry.isFile()) continue;
+    const real = await resolveInside(path.join(logsDir, entry.name));
+    if (real) logs.push(real);
   }
   return { dir: root, report, logs };
 }
@@ -200,6 +236,12 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
   const appRoot = record.platform === 'windows' ? record.result.folderPath : record.result.appPath;
   const configPath = configPathFor(record);
   const allowedRoots = [appRoot, diagnostics?.dir].filter(Boolean);
+  const allowedRealRoots = [];
+  for (const root of allowedRoots) {
+    try {
+      allowedRealRoots.push(fs.realpathSync(root));
+    } catch { /* 根目录不存在时由候选检查兜底 */ }
+  }
   const resolveReadable = (input) => {
     const raw = String(input || '').trim();
     if (!raw) throw new Error('缺少文件路径');
@@ -211,9 +253,18 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
       if (diagnostics?.dir) candidates.push(path.join(diagnostics.dir, raw));
     }
     for (const candidate of candidates) {
-      if (allowedRoots.some((root) => isPathInside(candidate, root)) && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-        return candidate;
+      if (!fs.existsSync(candidate)) continue;
+      let real;
+      try {
+        real = fs.realpathSync(candidate);
+      } catch {
+        continue;
       }
+      // 词法路径可能在允许根内，但符号链接/目录联接会指向根外；按 realpath 再判断。
+      if (!allowedRealRoots.some((root) => isPathInside(real, root))) continue;
+      try {
+        if (fs.statSync(real).isFile()) return real;
+      } catch { /* ignore */ }
     }
     throw new Error(`路径不在允许范围或不存在：${raw}`);
   };
@@ -737,7 +788,10 @@ function setupIpc() {
   });
 
   ipcMain.handle('settings:get', async () => publicSettings(await readSettings()));
-  ipcMain.handle('settings:set', async (_event, patch) => publicSettings(await saveSettings(patch)));
+  ipcMain.handle('settings:set', async (_event, patch) => {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('设置参数无效');
+    return publicSettings(await saveSettings(patch));
+  });
 
   ipcMain.handle('ai:test', async () => {
     const settings = await readSettings();
@@ -766,70 +820,71 @@ function setupIpc() {
   });
 
   ipcMain.handle('ai:fix', async (event, payload = {}) => {
-    const settings = await readSettings();
-    if (!settings.ai.apiKey) throw new Error('还没有配置 API Key，请先在设置里填写');
-    const buildId = String(payload.buildId || '');
-    if (!buildId) throw new Error('缺少构建 ID');
-    if (aiRunActive) throw new Error('已有 AI 修复任务在运行');
-    const diagnostics = payload.diagnosticsPath ? await importDiagnostics(payload.diagnosticsPath) : null;
-    const sendEvent = (data) => {
-      if (!event.sender.isDestroyed()) event.sender.send('ai:event', data);
-    };
-    const rebuild = async (advanced = {}) => {
-      const record = await readBuildContext(buildId);
-      if (!record) throw new Error('构建记录已丢失，无法重建');
-      if (record.platform === 'windows') {
-        const runtime = await resolveElectronRuntime({
-          version: record.macAnalysis?.electronVersion,
-          proxy: settings.proxy,
-          manualZip: advanced.manualElectronZip || record.options?.manualElectronZip || '',
-          onProgress: (progress) => sendEvent({ type: 'progress', ...progress }),
-        });
-        const rebuilt = await assembleWindowsApp({
-          analysis: record.macAnalysis,
-          electronDir: runtime.dir,
-          outputDir: record.options.outputDir,
-          onProgress: (progress) => sendEvent({ type: 'progress', ...progress }),
-        });
-        record.result = { ...rebuilt, zipPath: rebuilt.zipPath, folderPath: rebuilt.folderPath };
-        await recordBuildContext(buildId, record);
-        return { zipPath: rebuilt.zipPath, folderPath: rebuilt.folderPath, platform: 'windows' };
+    if (!payload || typeof payload !== 'object') throw new Error('修复请求参数无效');
+    return withAiLock(async () => {
+      const settings = await readSettings();
+      if (!settings.ai.apiKey) throw new Error('还没有配置 API Key，请先在设置里填写');
+      const buildId = typeof payload.buildId === 'string' ? payload.buildId.trim() : '';
+      if (!buildId) throw new Error('缺少构建 ID');
+      if (payload.diagnosticsPath !== undefined && payload.diagnosticsPath !== null && typeof payload.diagnosticsPath !== 'string') {
+        throw new Error('诊断包路径无效');
       }
-      const advancedNext = { ...(record.options.advanced || {}), ...advanced };
-      const result = await buildBundle(
-        {
-          app: record.app,
-          analysis: record.analysis,
-          installer: record.installer || null,
-          advanced: advancedNext,
-          outputDir: record.options.outputDir,
-          engineMode: advanced.engineMode || record.options.engineMode,
-          manualEngineArchive: record.options.manualEngineArchive || '',
-          includeRuntimes: record.options.includeRuntimes,
-          includeWineMono: record.options.includeWineMono,
-          includeUserData: record.options.includeUserData,
-          proxy: settings.proxy,
-        },
-        (progress) => sendEvent({ type: 'progress', ...progress }),
-      );
-      record.options.advanced = advancedNext;
-      record.result = { appPath: result.appPath, zipPath: result.zipPath, folderPath: result.folderPath };
-      await recordBuildContext(buildId, record);
-      return { zipPath: result.zipPath, appPath: result.appPath, platform: 'mac' };
-    };
-    const ctx = await buildFixerContext({ buildId, diagnostics, rebuild });
-    const tools = createFixerTools({ ctx });
-    const userPrompt = buildFixerPrompt({
-      appName: ctx.appName,
-      buildId,
-      platform: ctx.platform,
-      analysisSummary: ctx.analysisSummary,
-      diagnosticsSummary: ctx.diagnosticsSummary,
-    });
-    aiRunActive = true;
-    let run;
-    try {
-      run = await runAgent({
+      const diagnostics = payload.diagnosticsPath ? await importDiagnostics(payload.diagnosticsPath) : null;
+      const sendEvent = (data) => {
+        if (!event.sender.isDestroyed()) event.sender.send('ai:event', data);
+      };
+      const rebuild = async (advanced = {}) => {
+        const record = await readBuildContext(buildId);
+        if (!record) throw new Error('构建记录已丢失，无法重建');
+        if (record.platform === 'windows') {
+          const runtime = await resolveElectronRuntime({
+            version: record.macAnalysis?.electronVersion,
+            proxy: settings.proxy,
+            manualZip: advanced.manualElectronZip || record.options?.manualElectronZip || '',
+            onProgress: (progress) => sendEvent({ type: 'progress', ...progress }),
+          });
+          const rebuilt = await assembleWindowsApp({
+            analysis: record.macAnalysis,
+            electronDir: runtime.dir,
+            outputDir: record.options.outputDir,
+            onProgress: (progress) => sendEvent({ type: 'progress', ...progress }),
+          });
+          record.result = { ...rebuilt, zipPath: rebuilt.zipPath, folderPath: rebuilt.folderPath };
+          await recordBuildContext(buildId, record);
+          return { zipPath: rebuilt.zipPath, folderPath: rebuilt.folderPath, platform: 'windows' };
+        }
+        const advancedNext = { ...(record.options.advanced || {}), ...advanced };
+        const result = await buildBundle(
+          {
+            app: record.app,
+            analysis: record.analysis,
+            installer: record.installer || null,
+            advanced: advancedNext,
+            outputDir: record.options.outputDir,
+            engineMode: advanced.engineMode || record.options.engineMode,
+            manualEngineArchive: record.options.manualEngineArchive || '',
+            includeRuntimes: record.options.includeRuntimes,
+            includeWineMono: record.options.includeWineMono,
+            includeUserData: record.options.includeUserData,
+            proxy: settings.proxy,
+          },
+          (progress) => sendEvent({ type: 'progress', ...progress }),
+        );
+        record.options.advanced = advancedNext;
+        record.result = { appPath: result.appPath, zipPath: result.zipPath, folderPath: result.folderPath };
+        await recordBuildContext(buildId, record);
+        return { zipPath: result.zipPath, appPath: result.appPath, platform: 'mac' };
+      };
+      const ctx = await buildFixerContext({ buildId, diagnostics, rebuild });
+      const tools = createFixerTools({ ctx });
+      const userPrompt = buildFixerPrompt({
+        appName: ctx.appName,
+        buildId,
+        platform: ctx.platform,
+        analysisSummary: ctx.analysisSummary,
+        diagnosticsSummary: ctx.diagnosticsSummary,
+      });
+      const run = await runAgent({
         settings: {
           ...settings.ai,
           proxy: settings.proxy,
@@ -839,16 +894,14 @@ function setupIpc() {
         maxSteps: Math.min(Math.max(Number(payload.maxSteps) || 8, 1), 12),
         onEvent: sendEvent,
       });
-    } finally {
-      aiRunActive = false;
-    }
-    return {
-      buildId,
-      finished: run.finished,
-      summary: run.finalText,
-      trace: run.trace,
-      diagnostics: diagnostics ? { dir: diagnostics.dir, report: diagnostics.report } : null,
-    };
+      return {
+        buildId,
+        finished: run.finished,
+        summary: run.finalText,
+        trace: run.trace,
+        diagnostics: diagnostics ? { dir: diagnostics.dir, report: diagnostics.report } : null,
+      };
+    });
   });
   ipcMain.handle('history:list', () => readHistory());
   ipcMain.handle('history:clear', async () => {
@@ -857,6 +910,7 @@ function setupIpc() {
   });
 
   ipcMain.handle('recipe:export', async (_event, payload = {}) => {
+    if (!payload || typeof payload !== 'object') throw new Error('配方请求参数无效');
     if (!payload.app) throw new Error('缺少应用信息，无法导出配方');
     const recipe = buildRecipe({
       app: payload.app,
@@ -930,6 +984,9 @@ function setupIpc() {
   ipcMain.handle('window:close', () => mainWindow?.close());
 
   ipcMain.handle('dialog:output', async (_event, requestedPath = '') => {
+    if (requestedPath !== undefined && requestedPath !== null && typeof requestedPath !== 'string') {
+      throw new Error('输出目录参数无效');
+    }
     const settings = await readSettings();
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择 macOS 安装包输出目录',
@@ -951,6 +1008,7 @@ function setupIpc() {
   });
 
   ipcMain.handle('dialog:app-exe', async (_event, payload = {}) => {
+    if (!payload || typeof payload !== 'object') throw new Error('应用信息参数无效');
     const appInfo = payload.app;
     if (!appInfo?.installPath) throw new Error('应用缺少安装目录，无法重新指定主程序');
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -1027,9 +1085,16 @@ function setupIpc() {
   });
 
   ipcMain.handle('mactowin:build', async (event, payload = {}) => {
+    if (!payload || typeof payload !== 'object') throw new Error('转换请求参数无效');
+    if (currentBuild) throw new Error('已有转换任务正在运行');
     const appInfo = payload.app;
     const analysis = payload.macAnalysis || appInfo?.macAnalysis;
     if (!analysis?.isElectron) throw new Error('当前只支持把 Electron 的 macOS 应用重组为 Windows 版');
+    if (typeof analysis.path !== 'string' || !analysis.path.trim()) throw new Error('缺少 macOS 应用路径');
+    const bundleStat = await fsp.stat(analysis.path).catch(() => null);
+    if (!bundleStat?.isDirectory()) throw new Error('macOS 应用路径不存在或不是文件夹');
+    if (payload.outputDir !== undefined && payload.outputDir !== null && typeof payload.outputDir !== 'string') throw new Error('输出目录无效');
+    if (payload.manualElectronZip && typeof payload.manualElectronZip !== 'string') throw new Error('Electron 运行时压缩包路径无效');
     const settings = await readSettings();
     const outputDir = payload.outputDir || settings.outputDir;
     const sendProgress = (progress) => {
@@ -1115,6 +1180,7 @@ function setupIpc() {
   });
 
   ipcMain.handle('apps:analyze', async (_event, payload = {}) => {
+    if (!payload || typeof payload !== 'object') throw new Error('分析请求参数无效');
     const appInfo = payload.app;
     if (!appInfo) throw new Error('缺少应用信息');
     const services = payload.services || scanCache?.services || [];
@@ -1132,6 +1198,7 @@ function setupIpc() {
   });
 
   ipcMain.handle('build:start', async (event, payload = {}) => {
+    if (!payload || typeof payload !== 'object') throw new Error('构建请求参数无效');
     if (currentBuild) throw new Error('已有转换任务正在运行');
     const appInfo = payload.app;
     if (!appInfo) throw new Error('缺少应用信息');
@@ -1219,6 +1286,9 @@ function setupIpc() {
 
   ipcMain.handle('shell:open', async (_event, target) => {
     assertString(target, '路径');
+    const stat = await fsp.stat(target).catch(() => null);
+    // shell.openPath 会执行任意可执行文件/脚本；UI 只需要打开构建产物与缓存目录。
+    if (!stat?.isDirectory()) throw new Error('只能打开文件夹');
     return shell.openPath(target);
   });
 

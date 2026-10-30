@@ -245,7 +245,7 @@
     isDemo: true,
     info: async () => ({
       name: 'Win2Mac Studio',
-      version: '0.5.2',
+      version: '0.5.3',
       electron: '—',
       node: '—',
       platform: 'win32',
@@ -258,7 +258,17 @@
     }),
     getSettings: async () => settings,
     setSettings: async (patch) => {
-      settings = { ...settings, ...patch };
+      const next = { ...settings, ...patch };
+      if (patch.ai !== undefined) {
+        const ai = { ...(settings.ai || {}), ...patch.ai };
+        if (patch.ai.clearKey) ai.apiKey = '';
+        if (patch.ai.apiKey) ai.apiKey = String(patch.ai.apiKey);
+        ai.hasKey = Boolean(ai.apiKey);
+        ai.keyHint = ai.hasKey ? `${ai.apiKey.slice(0, 3)}…${ai.apiKey.slice(-4)}` : '';
+        delete ai.apiKey;
+        next.ai = ai;
+      }
+      settings = next;
       return settings;
     },
     scanApps: async () => {
@@ -296,7 +306,7 @@
       await wait(500);
       const chosen = apps[1];
       const app = { ...chosen, id: 'demo-archive', name: '压缩包演示应用', source: 'archive', archiveName: 'demo-app.zip' };
-      return { app, analysis: chosen.analysis, kind: 'app', archive: { path: 'C:\Users\你\Downloads\demo-app.zip', name: 'demo-app.zip', extractedPath: 'C:\Users\你\AppData\Local\Win2Mac\imports\zip-demo', files: 109, bytes: 474339500 } };
+      return { app, analysis: chosen.analysis, kind: 'app', archive: { path: 'C:\\Users\\你\\Downloads\\demo-app.zip', name: 'demo-app.zip', extractedPath: 'C:\\Users\\你\\AppData\\Local\\Win2Mac\\imports\\zip-demo', files: 109, bytes: 474339500 } };
     },
     pickInstaller: async () => {
       await wait(300);
@@ -344,7 +354,7 @@
       const recipe = {
         format: 'win2mac-recipe/v1',
         createdAt: new Date().toISOString(),
-        generator: { name: 'Win2Mac Studio', version: '0.5.2' },
+        generator: { name: 'Win2Mac Studio', version: '0.5.3' },
         app: { name: payload.app?.name || 'Demo App', publisher: payload.app?.publisher || '', version: payload.app?.version || '', exeName: 'app.exe', source: 'registry' },
         match: { name: payload.app?.name || 'Demo App', publisher: payload.app?.publisher || '', exeName: 'app.exe', bits: 64, size: payload.app?.estimatedSizeBytes || 0 },
         compatibility: { grade: payload.analysis?.grade || 'A', label: payload.analysis?.gradeLabel || '', summary: payload.analysis?.gradeSummary || '', recommendedEngine: 'wine' },
@@ -361,7 +371,7 @@
         recipe: {
           format: 'win2mac-recipe/v1',
           createdAt: new Date().toISOString(),
-          generator: { name: 'Win2Mac Studio', version: '0.5.2' },
+          generator: { name: 'Win2Mac Studio', version: '0.5.3' },
           app: { name: target.name, publisher: target.publisher, version: target.version, exeName: '7zFM.exe', source: 'registry' },
           match: { name: target.name, publisher: target.publisher, exeName: '7zFM.exe', bits: 64, size: target.estimatedSizeBytes },
           compatibility: { grade: 'A', label: '可直接运行', summary: '社区验证配方', recommendedEngine: 'wine' },

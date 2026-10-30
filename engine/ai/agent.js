@@ -59,30 +59,49 @@ async function runAgent({
       tools: tools.map(toToolSchema),
       toolChoice: 'auto',
     });
+    if (!reply || typeof reply !== 'object') throw new Error('模型响应格式无效');
     if (reply.content) {
       finalText = reply.content;
       onEvent({ type: 'assistant', content: reply.content });
     }
-    if (!reply.toolCalls.length) {
+    const toolCalls = (Array.isArray(reply.toolCalls) ? reply.toolCalls : [])
+      .filter((call) => call && typeof call.name === 'string' && call.name.trim());
+    if (!toolCalls.length) {
       trace.push({ step, type: 'message', content: reply.content });
       break;
     }
+    // 部分兼容接口会复用/省略 id；assistant.tool_calls 与 tool 消息必须一一对应且 id 唯一。
+    const usedIds = new Set();
+    const callIds = toolCalls.map((call, index) => {
+      const base = String(call.id || `call_${step}_${index}`);
+      let id = base;
+      let suffix = 1;
+      while (usedIds.has(id)) {
+        id = `${base}_${suffix}`;
+        suffix += 1;
+      }
+      usedIds.add(id);
+      return id;
+    });
+    const callNames = toolCalls.map((call) => call.name.trim());
     messages.push({
       role: 'assistant',
       content: reply.content || '',
-      tool_calls: reply.toolCalls.map((call) => ({
-        id: call.id || `call_${step}_${call.name}`,
+      tool_calls: toolCalls.map((call, index) => ({
+        id: callIds[index],
         type: 'function',
-        function: { name: call.name, arguments: JSON.stringify(call.arguments || {}) },
+        function: { name: callNames[index], arguments: JSON.stringify(call.arguments || {}) },
       })),
     });
-    for (const call of reply.toolCalls) {
-      const tool = byName.get(call.name);
+    for (let index = 0; index < toolCalls.length; index += 1) {
+      const call = toolCalls[index];
+      const name = callNames[index];
+      const tool = byName.get(name);
       let result;
       if (!tool) {
-        result = { error: `未知工具：${call.name}` };
+        result = { error: `未知工具：${name}` };
       } else {
-        onEvent({ type: 'tool', step, name: call.name, arguments: call.arguments });
+        onEvent({ type: 'tool', step, name, arguments: call.arguments });
         try {
           result = await tool.run(call.arguments || {});
         } catch (error) {
@@ -90,10 +109,10 @@ async function runAgent({
         }
       }
       const text = truncate(result);
-      trace.push({ step, type: 'tool', name: call.name, arguments: call.arguments, result: text });
-      onEvent({ type: 'toolResult', step, name: call.name, result: text });
-      messages.push({ role: 'tool', tool_call_id: call.id || `call_${step}_${call.name}`, content: text });
-      if (call.name === 'finish' && !result?.error) {
+      trace.push({ step, type: 'tool', name, arguments: call.arguments, result: text });
+      onEvent({ type: 'toolResult', step, name, result: text });
+      messages.push({ role: 'tool', tool_call_id: callIds[index], content: text });
+      if (name === 'finish' && !result?.error) {
         finished = true;
         finalText = result?.summary || finalText;
       }

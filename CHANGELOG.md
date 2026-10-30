@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.3 — 2026-10-29
+
+### Security
+
+- `shell:open` 只允许打开文件夹，避免通过 IPC 执行任意可执行文件/脚本。
+- 诊断包与 AI `read_file` 统一 realpath 后再做 `isPathInside`，阻断目录联接/符号链接越界读取；诊断包只接受大小受限的 `Report.json`。
+- Mac→Windows 重组对源 `.app` 与载荷做 realpath 校验，并要求 `Contents/Info.plist` 存在，防止把任意目录当载荷复制。
+- settings / AI IPC 增加对象校验；`CFBundleExecutable` 不再允许路径分隔符。
+
+### Fixed
+
+- `writeZip` 失败时关闭流并删除半成品 ZIP（Windows 句柄占用导致后续清理失败）。
+- FAT64 通用二进制架构步长修正；`.node` 检测读取 4 KB 头，避免漏判 Mach-O。
+- 无 Electron Framework 时从 ASAR 内 `package.json` 读取 Electron 版本。
+- 手动 Electron 运行时缓存残缺时可自动恢复；AI 客户端容错非数组 tool_calls、跨块 UTF-8 与超时中文提示。
+- 前端：补齐动态内容转义、Mac 应用转换按钮与详情分支、导入防重入、AI 面板/诊断按钮不可用兜底、窄窗表格横向滚动。
+
+### Tests
+
+- 单元测试 80/80（新增 IPC 边界、真实二进制 plist、ZIP 自包含/其他应用隔离、安全路径等回归）；E2E 通过。
+
 ## 0.5.2 — 2026-10-29
 
 ### Fixed

@@ -158,3 +158,197 @@ test('Agent 在工具报错时继续运行并受步数限制', async () => {
   assert.equal(calls, 3);
   assert.ok(result.trace.every((item) => item.type === 'tool' && item.result.includes('文件不存在')));
 });
+
+test('Agent 为缺少 id 的并行工具调用生成唯一 id', async () => {
+  const result = await runAgent({
+    settings: { baseUrl: 'http://x', apiKey: 'k', model: 'm' },
+    client: async () => ({
+      content: '',
+      toolCalls: [
+        { name: 'read_file', arguments: { path: 'a' } },
+        { name: 'read_file', arguments: { path: 'b' } },
+      ],
+    }),
+    tools: [{
+      name: 'read_file',
+      description: 'read',
+      parameters: { type: 'object', properties: {} },
+      run: async (args) => ({ got: args.path }),
+    }],
+    userPrompt: 'x',
+    maxSteps: 1,
+  });
+  const assistant = result.messages.find((message) => message.role === 'assistant');
+  const ids = assistant.tool_calls.map((call) => call.id);
+  assert.equal(new Set(ids).size, 2);
+  assert.equal(ids.every(Boolean), true);
+  assert.deepEqual(
+    result.messages.filter((message) => message.role === 'tool').map((message) => message.tool_call_id),
+    ids,
+  );
+});
+
+test('客户端错误信息会抹掉 API Key', async () => {
+  const secret = 'sk-test-super-secret-key';
+  const { server, port } = await startServer((_req, res) => {
+    res.statusCode = 401;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: { message: `invalid key ${secret}` } }));
+  });
+  try {
+    await assert.rejects(
+      () => chat({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: secret,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+      (error) => {
+        assert.match(error.message, /401/);
+        assert.equal(error.message.includes(secret), false);
+        assert.match(error.message, /\*\*\*/);
+        return true;
+      },
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('parseChatResponse 忽略非数组/无名称的 tool_calls', () => {
+  const reply = parseChatResponse({
+    choices: [{
+      message: {
+        content: 'hi',
+        tool_calls: [
+          null,
+          { id: 'a', function: { name: '   ', arguments: '{}' } },
+          { id: 'b', function: { name: 'get_status', arguments: '{}' } },
+        ],
+      },
+    }],
+  });
+  assert.equal(reply.toolCalls.length, 1);
+  assert.equal(reply.toolCalls[0].name, 'get_status');
+
+  const noArray = parseChatResponse({ choices: [{ message: { content: 'x', tool_calls: {} } }] });
+  assert.deepEqual(noArray.toolCalls, []);
+});
+
+test('Agent 对重复的 tool_call id 去重并保持配对', async () => {
+  const result = await runAgent({
+    settings: { baseUrl: 'http://x', apiKey: 'k', model: 'm' },
+    client: async () => ({
+      content: '',
+      toolCalls: [
+        { id: 'dup', name: 'read_file', arguments: { path: 'a' } },
+        { id: 'dup', name: 'read_file', arguments: { path: 'b' } },
+      ],
+    }),
+    tools: [{
+      name: 'read_file',
+      description: 'read',
+      parameters: { type: 'object', properties: {} },
+      run: async (args) => ({ got: args.path }),
+    }],
+    userPrompt: 'x',
+    maxSteps: 1,
+  });
+  const assistant = result.messages.find((message) => message.role === 'assistant');
+  const ids = assistant.tool_calls.map((call) => call.id);
+  assert.equal(new Set(ids).size, 2);
+  assert.deepEqual(
+    result.messages.filter((message) => message.role === 'tool').map((message) => message.tool_call_id),
+    ids,
+  );
+});
+
+test('Agent 容忍缺少 toolCalls 字段的响应', async () => {
+  const result = await runAgent({
+    settings: { baseUrl: 'http://x', apiKey: 'k', model: 'm' },
+    client: async () => ({ content: '没有工具调用' }),
+    tools: [{
+      name: 'read_file',
+      description: 'read',
+      parameters: { type: 'object', properties: {} },
+      run: async () => ({}),
+    }],
+    userPrompt: 'x',
+    maxSteps: 2,
+  });
+  assert.equal(result.finished, false);
+  assert.equal(result.finalText, '没有工具调用');
+});
+
+test('curl 代理响应跨块截断 UTF-8 时仍能正确解码', async () => {
+  const prefix = '{"choices":[{"message":{"content":"';
+  const suffix = '","tool_calls":[]}}]}';
+  // 让“中”的第一个字节正好落在 curl 常见的 16 KB 输出边界附近，并主动拆成多个 TCP 块。
+  const content = `${'a'.repeat(16383 - Buffer.byteLength(prefix))}中文测试🚀`;
+  const payload = Buffer.from(prefix + content + suffix, 'utf8');
+  const cut = payload.indexOf(Buffer.from('中')) + 1;
+  const { server, port } = await startServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': payload.length });
+      res.write(payload.subarray(0, cut));
+      setTimeout(() => {
+        res.write(payload.subarray(cut, cut + 1));
+        setTimeout(() => res.end(payload.subarray(cut + 1)), 20);
+      }, 20);
+    });
+  });
+  try {
+    const reply = await chat({
+      baseUrl: 'http://example.invalid/v1',
+      apiKey: 'k',
+      proxy: `http://127.0.0.1:${port}`,
+      messages: [{ role: 'user', content: 'hi' }],
+      timeoutMs: 10000,
+    });
+    assert.equal(reply.content, content);
+  } finally {
+    server.close();
+  }
+});
+
+test('fetch 超时返回中文提示', async () => {
+  const { server, port } = await startServer((req) => {
+    req.resume();
+  });
+  try {
+    await assert.rejects(
+      () => chat({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: 'k',
+        messages: [{ role: 'user', content: 'hi' }],
+        timeoutMs: 100,
+      }),
+      /模型请求超时/,
+    );
+  } finally {
+    if (server.closeAllConnections) server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('客户端拒绝超过 2 MB 的响应', async () => {
+  const { server, port } = await startServer((_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.on('error', () => {});
+    const chunk = Buffer.alloc(512 * 1024, 0x20);
+    for (let i = 0; i < 5 && !res.destroyed; i += 1) res.write(chunk);
+    res.end();
+  });
+  try {
+    await assert.rejects(
+      () => chat({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: 'k',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+      /超过 2 MB/,
+    );
+  } finally {
+    server.close();
+  }
+});

@@ -555,6 +555,7 @@ a { color: inherit; }
 .engine-table td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
 .engine-table .mini-tag { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #f2f0e9; font: 8.5px var(--mono); color: var(--ink-2); margin: 1px 3px 1px 0; }
 .engine-table .ok { color: var(--green); } .engine-table .mid { color: var(--amber); } .engine-table .no { color: var(--red); }
+.table-scroll { overflow-x: auto; }
 .boundary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .boundary-item { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: #fbfaf6; }
 .boundary-item b { display: flex; align-items: center; gap: 7px; font-size: 11px; }
@@ -795,3 +796,12 @@ a { color: inherit; }
 .ai-line{white-space:pre-wrap;word-break:break-word;padding:2px 0;color:#3d424b}
 .ai-foot{padding:12px 18px;border-top:1px solid var(--line,#e8e6df);max-height:28vh;overflow:auto}
 .ai-summary{white-space:pre-wrap;font-size:13px;line-height:1.6}
+
+/* 窄窗口：避免列表与引擎表格被右侧裁切 */
+@media (max-width: 760px) {
+  .app-list { overflow-x: auto; overflow-y: hidden; }
+  .list-head, .app-row { min-width: 640px; }
+  .table-scroll .engine-table { min-width: 560px; }
+  .hero-actions { flex-wrap: wrap; }
+}
+

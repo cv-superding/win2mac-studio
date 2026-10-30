@@ -5,6 +5,14 @@ const { spawn } = require('node:child_process');
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_ERROR_CHARS = 4096;
+
+function redactSecret(text, secret) {
+  const value = String(text == null ? '' : text);
+  const key = String(secret || '');
+  if (!key) return value;
+  return value.split(key).join('***');
+}
 
 function normalizeEndpoint(baseUrl) {
   let url = String(baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
@@ -38,7 +46,12 @@ function parseChatResponse(data) {
   }
   const message = choice.message || {};
   const toolCalls = [];
-  for (const call of message.tool_calls || []) {
+  // 兼容接口可能返回非数组 tool_calls 或缺少 function.name；这些条目不能进入下一轮请求，否则会破坏配对。
+  const rawCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  for (const call of rawCalls) {
+    if (!call || typeof call !== 'object') continue;
+    const name = typeof call.function?.name === 'string' ? call.function.name.trim() : '';
+    if (!name) continue;
     let args = {};
     const raw = call.function?.arguments;
     if (raw) {
@@ -48,7 +61,7 @@ function parseChatResponse(data) {
         args = { _raw: String(raw) };
       }
     }
-    toolCalls.push({ id: call.id || '', name: call.function?.name || '', arguments: args });
+    toolCalls.push({ id: typeof call.id === 'string' ? call.id : '', name, arguments: args });
   }
   return {
     content: typeof message.content === 'string' ? message.content : '',
@@ -73,29 +86,66 @@ function runCurl(endpoint, apiKey, body, { proxy, timeoutMs }) {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    let out = '';
+    const chunks = [];
     let err = '';
     let size = 0;
+    let aborted = false;
     child.stdout.on('data', (chunk) => {
+      if (aborted) return;
       size += chunk.length;
       if (size > MAX_RESPONSE_BYTES) {
+        aborted = true;
         child.kill();
         reject(new Error('模型响应超过 2 MB，已中止'));
         return;
       }
-      out += chunk.toString('utf8');
+      // 不能逐块 toString：多字节 UTF-8 字符可能被 TCP 分块截断。
+      chunks.push(chunk);
     });
-    child.stderr.on('data', (chunk) => { err += chunk.toString('utf8'); });
+    child.stdout.on('error', () => {});
+    child.stderr.on('data', (chunk) => {
+      if (err.length < MAX_ERROR_CHARS) err += chunk.toString('utf8');
+    });
     child.on('error', reject);
     child.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`请求模型失败（curl ${code}）：${(err || out).trim().slice(0, 500)}`));
+        const output = Buffer.concat(chunks).toString('utf8');
+        reject(new Error(`请求模型失败（curl ${code}）：${redactSecret((err || output).trim(), apiKey).slice(0, 500)}`));
         return;
       }
-      resolve(out);
+      resolve(Buffer.concat(chunks).toString('utf8'));
     });
+    // curl 可能在读完请求体前退出（例如代理拒绝），此时 stdin 的 EPIPE 不能变成未捕获异常。
+    child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(body));
   });
+}
+
+async function readResponseText(response) {
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) throw new Error('模型响应超过 2 MB，已中止');
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      if (received > MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error('模型响应超过 2 MB，已中止');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function runFetch(endpoint, apiKey, body, { timeoutMs }) {
@@ -111,17 +161,21 @@ async function runFetch(endpoint, apiKey, body, { timeoutMs }) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    const text = await response.text();
-    if (text.length > MAX_RESPONSE_BYTES) throw new Error('模型响应超过 2 MB，已中止');
+    const text = await readResponseText(response);
     if (!response.ok) {
       let detail = text.slice(0, 500);
       try {
         const parsed = JSON.parse(text);
         detail = parsed?.error?.message || detail;
       } catch { /* keep raw */ }
-      throw new Error(`模型接口返回 ${response.status}：${detail}`);
+      throw new Error(`模型接口返回 ${response.status}：${redactSecret(detail, apiKey).slice(0, 500)}`);
     }
     return text;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`模型请求超时（${Math.max(1, Math.round(timeoutMs / 1000))} 秒）`);
+    }
+    throw new Error(`模型请求失败：${redactSecret(error?.message || error, apiKey).slice(0, 500)}`);
   } finally {
     clearTimeout(timer);
   }
@@ -151,10 +205,17 @@ async function chat(options) {
   try {
     data = JSON.parse(text);
   } catch {
-    throw new Error(`模型返回的不是 JSON：${text.slice(0, 300)}`);
+    throw new Error(`模型返回的不是 JSON：${redactSecret(text, apiKey).slice(0, 300)}`);
   }
-  if (data?.error) throw new Error(data.error.message || JSON.stringify(data.error).slice(0, 300));
-  return parseChatResponse(data);
+  if (data?.error) {
+    const message = data.error.message || JSON.stringify(data.error);
+    throw new Error(redactSecret(String(message), apiKey).slice(0, 300));
+  }
+  try {
+    return parseChatResponse(data);
+  } catch (error) {
+    throw new Error(redactSecret(error.message, apiKey));
+  }
 }
 
 async function testConnection(options) {

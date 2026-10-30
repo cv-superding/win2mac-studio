@@ -575,28 +575,40 @@ async function writeZip({ rootDir, rootName, zipPath, onProgress, expectedFiles 
     output.on('error', reject);
     zip.outputStream.on('error', reject);
   });
+  // 调用方通常会在 catch 中删除半成品；这里先挂一个空 catch，避免未 await 时出现未处理拒绝。
+  finished.catch(() => {});
   zip.outputStream.pipe(output);
 
-  const total = topEntries.length;
-  let index = 0;
-  for (const entry of topEntries) {
-    const absolute = path.join(rootDir, entry.name);
-    const target = `${rootName}/${entry.name}`;
-    if (entry.isDirectory()) {
-      await addDirectoryToZip(zip, absolute, target, stats);
-    } else if (entry.isFile()) {
-      const st = await fsp.stat(absolute);
-      const executable = /\.command$/.test(entry.name);
-      zip.addFile(absolute, target, { mode: executable ? 0o755 : 0o644, mtime: st.mtime });
-      stats.files += 1;
-      stats.bytes += st.size;
+  try {
+    const total = topEntries.length;
+    let index = 0;
+    for (const entry of topEntries) {
+      const absolute = path.join(rootDir, entry.name);
+      const target = `${rootName}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await addDirectoryToZip(zip, absolute, target, stats);
+      } else if (entry.isFile()) {
+        const st = await fsp.stat(absolute);
+        const executable = /\.command$/.test(entry.name);
+        zip.addFile(absolute, target, { mode: executable ? 0o755 : 0o644, mtime: st.mtime });
+        stats.files += 1;
+        stats.bytes += st.size;
+      }
+      index += 1;
+      emit(onProgress, 'zip', `正在打包 ${index}/${total} 个顶层条目…`);
     }
-    index += 1;
-    emit(onProgress, 'zip', `正在打包 ${index}/${total} 个顶层条目…`);
+    zip.end({ forceZip64Format: true });
+    await finished;
+    return stats;
+  } catch (error) {
+    // 出错时关闭流并删除半成品 ZIP；否则 Windows 上文件句柄会让后续清理失败。
+    try { zip.outputStream.unpipe(output); } catch { /* ignore */ }
+    try { zip.outputStream.destroy(); } catch { /* ignore */ }
+    output.destroy();
+    await finished.catch(() => {});
+    await fsp.rm(zipPath, { force: true }).catch(() => {});
+    throw error;
   }
-  zip.end({ forceZip64Format: true });
-  await finished;
-  return stats;
 }
 
 function buildConfigLines({ app, bundleId, buildId, payloadVersion, payloadInfo, args, installer, installerArgs, installerPayload, installerWin, engineInfo, runtimes, registryFiles, userData, advanced, dirs, electron, hostAdb }) {
