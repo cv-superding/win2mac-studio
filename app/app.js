@@ -96,6 +96,7 @@
     pendingRecipe: null,
     archiveProgress: null,
     archiveImporting: false,
+    listEntered: false,
     cacheStats: null,
     cacheLoading: false,
     cacheError: null,
@@ -217,7 +218,7 @@
     return list;
   }
 
-  function appRowHtml(app) {
+  function appRowHtml(app, index = 0) {
     const metadata = [app.publisher, app.version ? `v${app.version}` : ''].filter(Boolean).join(' · ') || '未提供发布信息';
     const path = app.installPath || app.exePath || '';
     const size = app.estimatedSizeBytes || app.analysis?.directory?.scannedBytes || 0;
@@ -231,7 +232,7 @@
         ? '当前环境不支持 Mac → Windows 转换'
         : convertTitle;
     return `
-      <div class="app-row ${selected ? 'selected' : ''}" role="button" tabindex="0" data-app-id="${esc(app.id)}" data-app-row="${esc(app.id)}"${state.batchMode ? ` aria-pressed="${selected}"` : ''} aria-label="${state.batchMode ? '选择' : '查看'} ${esc(app.name)}">
+      <div class="app-row ${selected ? 'selected' : ''}${state.listEntered ? '' : ' row-enter'}"${state.listEntered ? '' : ` style="animation-delay:${Math.min(index, 10) * 24}ms"`} role="button" tabindex="0" data-app-id="${esc(app.id)}" data-app-row="${esc(app.id)}"${state.batchMode ? ` aria-pressed="${selected}"` : ''} aria-label="${state.batchMode ? '选择' : '查看'} ${esc(app.name)}">
         <div class="app-main">
           ${state.batchMode ? `<span class="row-check ${selected ? 'on' : ''}">${selected ? '<svg class="icon"><use href="#i-check"></use></svg>' : ''}</span>` : ''}
           ${iconHtml(app)}
@@ -268,7 +269,7 @@
     if (!list.length) {
       return `<div class="list-empty">没有匹配的应用。<button class="link-btn" data-action="reset-filters">清除筛选</button></div>`;
     }
-    return `<div class="list-head"><span>应用</span><span>安装位置</span><span>架构</span><span>体积</span><span>兼容性</span><span>${state.batchMode ? '选择' : '操作'}</span></div>${list.map((app) => appRowHtml(app)).join('')}`;
+    return `<div class="list-head"><span>应用</span><span>安装位置</span><span>架构</span><span>体积</span><span>兼容性</span><span>${state.batchMode ? '选择' : '操作'}</span></div>${list.map((app, index) => appRowHtml(app, index)).join('')}`;
   }
 
   function emptyStateHtml() {
@@ -426,6 +427,7 @@
         <div id="scan-banner-region">${scanBannerHtml()}</div>
         <div class="app-list" id="app-list">${listHtml()}</div>
       </div>`;
+    if (!state.listEntered && state.apps.length) state.listEntered = true;
   }
 
   function updateList() {
@@ -2560,10 +2562,8 @@
     el.innerHTML = `<svg class="icon"><use href="#i-${icon}"></use></svg><span>${esc(message)}</span>`;
     toastRoot.appendChild(el);
     setTimeout(() => {
-      el.style.opacity = '0';
-      el.style.transform = 'translateY(4px)';
-      el.style.transition = 'opacity .18s ease, transform .18s ease';
-      setTimeout(() => el.remove(), 200);
+      el.classList.add('leaving');
+      setTimeout(() => el.remove(), 180);
     }, 3600);
   }
 
