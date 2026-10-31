@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.5 — 2026-10-31
+
+### Fixed
+
+- **打开详情页时内容右移**：抽屉打开会 `overflow: hidden` 隐藏滚动条，内容区宽度突增 8px。现在 `.view` 使用 `scrollbar-gutter: stable` 始终保留槽位。
+
 ## 0.9.4 — 2026-10-31
 
 ### Fixed
