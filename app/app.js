@@ -98,6 +98,7 @@
     archiveImporting: false,
     listEntered: false,
     navCollapsed: false,
+    settingsSection: 'general',
     cacheStats: null,
     cacheLoading: false,
     cacheError: null,
@@ -1353,9 +1354,13 @@
     const mode = s.engineMode || 'auto';
     view.innerHTML = `
       <div class="page">
-        <p class="page-intro">这些默认值会带入每一次新的转换任务。</p>
-        <div class="settings-grid">
-          <section class="settings-card">
+        <div class="settings-shell">
+          <nav class="settings-nav" aria-label="设置分类">
+            ${[['general','常规','settings'],['engine','引擎与网络','cpu'],['ai','AI 修复','spark'],['maintenance','维护','disk'],['about','关于','info']]
+              .map(([key, label, icon]) => `<button class="settings-nav-item${(state.settingsSection || 'general') === key ? ' active' : ''}" data-action="settings-section" data-settings-section="${key}"><svg class="icon"><use href="#i-${icon}"></use></svg><span>${label}</span></button>`).join('')}
+          </nav>
+          <div class="settings-grid">
+          <section class="settings-card" data-settings-group="general">
             <h2>输出位置</h2>
             <p>每个任务会生成同名文件夹（含 .app、说明与脚本）以及 ZIP。</p>
             <div class="settings-field">
@@ -1369,7 +1374,7 @@
             <div class="warning-inline" style="background:#f5f3ed;color:var(--muted);"><svg class="icon"><use href="#i-info"></use></svg><span>生成 .app 不需要 Mac。输出目录建议放在本地磁盘，而不是同步盘。</span></div>
           </section>
 
-          <section class="settings-card">
+          <section class="settings-card" data-settings-group="engine">
             <h2>默认运行引擎</h2>
             <p>决定目标 Mac 首次运行时的引擎来源。自动模式适合大多数用户。</p>
             <div class="engine-options vertical">
@@ -1379,7 +1384,7 @@
             </div>
           </section>
 
-          <section class="settings-card">
+          <section class="settings-card" data-settings-group="general">
             <h2>运行时与内容</h2>
             <p>打包时自动准备目标 Mac 需要的兼容组件。</p>
             <div class="settings-toggle">
@@ -1396,7 +1401,7 @@
             </div>
           </section>
 
-          <section class="settings-card">
+          <section class="settings-card" data-settings-group="engine">
             <h2>网络与下载</h2>
             <p>仅用于下载 Wine 引擎、VC++ / Wine Mono 运行时。不使用代理时留空。</p>
             <div class="settings-field">
@@ -1413,36 +1418,50 @@
             </div>
           </section>
 
-          <section class="settings-card">
-            <h2>AI 修复（OpenAI 兼容）</h2>
-            <p>接口需兼容 /chat/completions，可填 OpenAI、DeepSeek、通义、本地 LM Studio 等。构建完成后点「AI 修复」，它会读取 Mac 诊断包、改配置并按需重建。</p>
-            <div class="settings-field">
-              <label>Base URL</label>
-              <input type="text" id="ai-base-url" value="${esc(s.ai?.baseUrl || 'https://api.openai.com/v1')}" placeholder="https://api.openai.com/v1">
+          <section class="settings-card" data-settings-group="ai">
+            <div class="settings-card-head">
+              <div><h2>AI 修复</h2><p>兼容 /chat/completions 的接口，可填 OpenAI、DeepSeek、通义或本地 LM Studio。构建完成后「AI 修复」会读取 Mac 诊断包并按需重建。</p></div>
+              <span class="ai-state${s.ai?.hasKey ? ' on' : ''}">${s.ai?.hasKey ? `已配置 ${esc(s.ai.keyHint)}` : '未配置'}</span>
             </div>
-            <div class="settings-field">
-              <label>模型</label>
-              <input type="text" id="ai-model" value="${esc(s.ai?.model || 'gpt-4o-mini')}" placeholder="gpt-4o-mini">
+            <div class="settings-form-grid">
+              <div class="settings-field">
+                <label>Base URL</label>
+                <input type="text" id="ai-base-url" value="${esc(s.ai?.baseUrl || 'https://api.openai.com/v1')}" placeholder="https://api.openai.com/v1">
+              </div>
+              <div class="settings-field">
+                <label>模型</label>
+                <input type="text" id="ai-model" value="${esc(s.ai?.model || 'gpt-4o-mini')}" placeholder="gpt-4o-mini">
+              </div>
+              <div class="settings-field span-2">
+                <label>API Key</label>
+                <input type="password" id="ai-key" value="" placeholder="${s.ai?.hasKey ? '留空表示不修改已保存的 Key' : 'sk-...'}" autocomplete="off">
+              </div>
             </div>
-            <div class="settings-field">
-              <label>API Key${s.ai?.hasKey ? `（已保存 ${esc(s.ai.keyHint)}）` : ''}</label>
-              <input type="password" id="ai-key" value="" placeholder="${s.ai?.hasKey ? '留空表示不修改' : 'sk-...'}" autocomplete="off">
-            </div>
-            <label class="settings-toggle"><input type="checkbox" id="ai-clear-key"><span>清除已保存的 Key</span></label>
-            <div class="settings-foot" style="margin-top:8px;display:flex;gap:8px;">
-              <button class="btn btn-primary btn-sm" data-action="save-ai">保存</button>
+            <div class="ai-actions">
+              <label class="settings-check"><input type="checkbox" id="ai-clear-key"><span>清除已保存的 Key</span></label>
+              <span class="spacer"></span>
               <button class="btn btn-ghost btn-sm" data-action="test-ai">测试连接</button>
+              <button class="btn btn-primary btn-sm" data-action="save-ai">保存</button>
             </div>
           </section>
 
-          <section class="settings-card">
+          <section class="settings-card" data-settings-group="ai">
+            <h2>修复能力与边界</h2>
+            <div class="ai-capabilities">
+              <div><b>可以做什么</b><p>读取诊断包与启动日志、搜索错误、修改 <code>config.env</code> 白名单键、按需重新构建（最多 2 次）。</p></div>
+              <div><b>不会做什么</b><p>不执行任意命令、不读取白名单外的文件、不绕过签名 / 隔离 / DRM / 反作弊。</p></div>
+              <div><b>Key 存在哪里</b><p>仅保存在本机 <code>%APPDATA%\Win2Mac\settings.json</code>，界面只显示掩码，不会随产物或配方导出。</p></div>
+            </div>
+          </section>
+
+          <section class="settings-card" data-settings-group="maintenance">
             <h2>环境诊断</h2>
             <p>检查 PowerShell、curl、引擎清单与磁盘空间。</p>
             <button class="btn btn-ghost btn-sm" data-action="run-diagnostics"><svg class="icon"><use href="#i-terminal"></use></svg>运行检查</button>
             <div class="diagnostic-list" id="diagnostic-list"></div>
           </section>
 
-          <section class="settings-card cache-card">
+          <section class="settings-card cache-card" data-settings-group="maintenance">
             <div class="settings-card-head">
               <div><h2>缓存与空间</h2><p>引擎、运行库与中断的临时构建。清理不会影响已生成的 .app 或任务记录。</p></div>
               <button class="btn btn-ghost btn-sm" data-action="refresh-cache" ${state.cacheLoading ? 'disabled' : ''}><svg class="icon"><use href="#i-refresh"></use></svg>刷新</button>
@@ -1450,7 +1469,7 @@
             <div id="cache-region">${cacheRegionHtml()}</div>
           </section>
 
-          <section class="settings-card">
+          <section class="settings-card" data-settings-group="about">
             <h2>关于</h2>
             <p>Win2Mac Studio 在 Windows 上生成标准 macOS .app 目录结构与 ZIP，不需要 Mac 参与构建。</p>
             <div class="about-row"><span>版本</span><b>Win2Mac Studio ${esc(state.info?.version || '0.1.0')}</b></div>
@@ -1459,8 +1478,10 @@
             <div class="about-row"><span>模式</span><b>${state.demo ? '浏览器演示数据（不会写入文件）' : '本机桌面模式'}</b></div>
             <div class="warning-inline" style="background:var(--green-soft);color:var(--green);"><svg class="icon"><use href="#i-shield"></use></svg><span>Windows 应用与商标归各自权利人所有。请确认你拥有打包与分发的权利。</span></div>
           </section>
+          </div>
         </div>
       </div>`;
+    applySettingsSection();
     if (!state.cacheStats && !state.cacheLoading) loadCacheStats();
   }
 
@@ -2733,6 +2754,16 @@
     }
   }
 
+  function applySettingsSection() {
+    const section = state.settingsSection || 'general';
+    document.querySelectorAll('[data-settings-group]').forEach((el) => {
+      el.style.display = el.dataset.settingsGroup === section ? '' : 'none';
+    });
+    document.querySelectorAll('[data-settings-section]').forEach((el) => {
+      el.classList.toggle('active', el.dataset.settingsSection === section);
+    });
+  }
+
   function applyNavState() {
     document.body.classList.toggle('nav-collapsed', state.navCollapsed);
     const toggle = document.querySelector('.nav-toggle');
@@ -2755,6 +2786,11 @@
     switch (action) {
       case 'toggle-nav':
         toggleNav();
+        break;
+      case 'settings-section':
+        state.settingsSection = element?.dataset?.settingsSection || 'general';
+        applySettingsSection();
+        view.scrollTop = 0;
         break;
       case 'scan':
         scan();
