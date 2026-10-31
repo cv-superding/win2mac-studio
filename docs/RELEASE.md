@@ -11,10 +11,10 @@
 | `release/Win2Mac-MacCheck-0.10.0.zip` | 可独立发送的 Mac 验证工具包 |
 | `release/SHA256SUMS.txt` | 以上三者 SHA-256 |
 
-- 安装包大小：120,896,373 bytes（约 115.3 MiB）
-- 安装包 SHA-256：`940b68b3cfc118729a9880168d5982103e8572f380f649071c93bae9cda21651`
+- 安装包大小：120,896,420 bytes（约 115.3 MiB）
+- 安装包 SHA-256：`b8878ba39029b59f1b183d625cedae1213b79a048bd8cb420caa377339bf3532`
 - 便携版 EXE SHA-256：`7d5d8d3119e8230792345c4cb2ebf7e8ba34b1addf7e5b436effa2ce031dd0c0`
-- MacCheck ZIP SHA-256：`52ae2926c71a2f36854b2918cb9e0e193771a39f41c541e43b9b12085b817c0b`
+- MacCheck ZIP SHA-256：`16c4661d4775ce83a0a98777c3dc49144b4155636060764ac81f1a4f3360452f`
 - 打包后 smoke：`version=0.10.0, bridge=true, nav=4, cacheGroups=3, ai.leaked=false`；ZIP 导入选中 `Smoke Fixture.exe`
 - 真实 IPC UI 扫描 smoke：`174 apps / 174 icons / 0 pending / 0 scanError`
 
