@@ -66,6 +66,49 @@ Windows 应用迁移到 Mac，现有工具几乎都在 Mac 端操作（Whisky、
 |---|
 | ![拖拽](docs/screenshots/17-drop-overlay.png) |
 
+## 能转换什么（支持矩阵）
+
+Win2Mac Studio 只做两件事，边界很清楚：**Windows 应用 → macOS（Wine 运行）** 和 **macOS Electron 应用 → Windows（换壳重组）**。它不是二进制翻译器。
+
+### Windows → macOS
+
+| 类型 | 支持 | 说明 |
+| --- | --- | --- |
+| 已安装的 Win32 / Win64 `.exe` 应用 | ✅ | 最常用；整目录打包，含 DLL、资源、注册表与用户配置 |
+| `.msi` / `.exe` 安装程序 | ✅ 实验性 | 生成“首次在 Mac 启动时才安装”的 `.app`；需填写静默参数与预期主程序 |
+| Electron（Windows，纯 JS） | ✅ | 自动加 `--no-sandbox` / `--disable-gpu` 等兼容参数 |
+| 依赖 VC++ 运行库的应用 | ✅ | 可勾选自动附带 VC++ Redistributable |
+| 依赖 .NET Framework 的应用 | ⚠️ | 可附带 Wine Mono，但复杂 .NET 应用仍可能失败 |
+| 32 位应用 | ⚠️ | 取决于 Wine 引擎（Gcenx WoW64 支持；部分老应用仍失败） |
+| 自带 macOS 版 `adb` 的 Android 工具 | ⚠️ 实验性 | 通过本机 adb server 桥接，不直通 USB |
+| 内核驱动 / Windows 服务 / 反作弊 / DRM / UWP / MSIX | ❌ | Wine 无法运行；请找官方 Mac 版或虚拟机 |
+| 依赖特定硬件/USB 直通的应用 | ❌ | Wine 不提供 USB 直通（ADB 是有限例外） |
+| ARM64 Windows 应用 | ❌ | 当前引擎为 x86_64，不能运行 ARM64 PE |
+
+### macOS → Windows
+
+| 类型 | 支持 | 说明 |
+| --- | --- | --- |
+| Electron（macOS，纯 JS/HTML，无 Mach-O 原生模块） | ✅ | 拆出 `app.asar` / `Resources/app`，装入对应版本的官方 Windows Electron，生成免安装 ZIP |
+| Electron + macOS 原生 `.node` 模块 | ❌ | `.node` 是 Mach-O 二进制，Windows 无法加载；需找 Windows 版模块或重写 |
+| Swift / Objective-C / Cocoa 原生应用 | ❌ | Windows 没有 AppKit/Metal/CoreFoundation 运行时；只能重写或用虚拟机 |
+| Mac App Store 应用（FairPlay 加密） | ❌ | 二进制被加密，无法拆包 |
+| `.dmg` / `.pkg` | ❌（需先解包） | 只接受 `.app` 文件夹或包含 `.app` 的 ZIP；`.dmg` 请先用 7-Zip 提取，Mac 上右键 `.app` → 压缩 |
+| iPhone / iPad 应用 | ❌ | 不是 macOS 应用 |
+
+### 导入格式
+
+- 支持：`.exe`、`.msi`、`.zip`、`.app` 文件夹、普通应用文件夹（拖拽或“导入 ZIP / 导入 Mac 应用”）。
+- 不支持：`.dmg`、`.pkg`、`.7z`、`.rar`（先解压或转换格式）。
+- ZIP 导入会安全解压并自动识别应用根目录；Mac 应用 ZIP 内需包含 `.app`。
+
+### 输出
+
+- Windows → macOS：标准 `.app` + 可分发 ZIP（macOS 11+），内含 Wine 启动器、完整性清单与验证脚本。
+- macOS → Windows：Windows x64 免安装目录 + ZIP，直接双击 EXE 运行，不依赖 Wine。
+
+> 兼容性上限由 Wine 与 Electron 决定，不是“原生移植”。转换前请先看应用评级：**A/B 通常可运行，C 需要调校，D 不建议转换**。
+
 ## 快速开始
 
 ### 最终用户（Windows 10/11 x64）
