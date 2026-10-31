@@ -198,9 +198,19 @@ async function chat(options) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('缺少对话内容');
   const endpoint = normalizeEndpoint(baseUrl);
   const body = normalizeBody({ model, messages, temperature, tools, toolChoice, maxTokens });
-  const text = proxy
-    ? await runCurl(endpoint, apiKey, body, { proxy, timeoutMs })
-    : await runFetch(endpoint, apiKey, body, { timeoutMs });
+  let text;
+  try {
+    text = proxy
+      ? await runCurl(endpoint, apiKey, body, { proxy, timeoutMs })
+      : await runFetch(endpoint, apiKey, body, { timeoutMs });
+  } catch (error) {
+    // Transient network / 5xx: retry once before surfacing the failure.
+    if (!/返回 (429|5\d\d)|fetch failed|curl|socket|timeout|EAI_AGAIN|ECONNRESET/i.test(error.message)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    text = proxy
+      ? await runCurl(endpoint, apiKey, body, { proxy, timeoutMs })
+      : await runFetch(endpoint, apiKey, body, { timeoutMs });
+  }
   let data;
   try {
     data = JSON.parse(text);

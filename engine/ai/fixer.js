@@ -24,6 +24,20 @@ function createFixerTools({ ctx, limits = {} }) {
       run: () => ctx.status(),
     },
     {
+      ...schema('list_known_issues', '列出确定性诊断引擎从日志/清单中识别的问题（先看这个）'),
+      run: () => ctx.knownIssues(),
+    },
+    {
+      ...schema('apply_fix', '应用某条已知问题的建议修复（配置/高级选项），之后通常需要 rebuild', {
+        id: { type: 'string', description: '问题 id，例如 engine-unavailable' },
+      }, ['id']),
+      run: (args) => ctx.applyFix(String(args.id || '')),
+    },
+    {
+      ...schema('verify_build', '重建后校验产物结构、配置键、manifest 与 ZIP 是否完整'),
+      run: () => ctx.verifyBuild(),
+    },
+    {
       ...schema('read_file', '读取白名单内的文本文件（config.env、bundle.json、诊断报告、日志等）', {
         path: { type: 'string', description: '绝对路径或相对路径（config.env、bundle.json、Report.md、Missing.txt、Logs/xxx.log）' },
         maxBytes: { type: 'integer', description: '最多读取字节数，默认 30000' },
@@ -51,7 +65,7 @@ function createFixerTools({ ctx, limits = {} }) {
       ...schema('rebuild', '用新的高级选项重新构建产物（会覆盖同一输出目录下的旧 ZIP）', {
         advanced: {
           type: 'object',
-          description: '可覆盖的高级选项：wineDebug、electronCompat(boolean)、dllOverrides、launchArgs、envText、engineMode(auto|bundled|reuse)',
+          description: '可覆盖选项：engineMode(auto|bundled|reuse)、wineDebug、electronCompat(boolean)、dllOverrides、launchArgs、envText、includeRuntimes(boolean)、includeWineMono(boolean)、includeUserData(boolean)',
           additionalProperties: true,
         },
       }),

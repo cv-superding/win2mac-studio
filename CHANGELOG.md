@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.0 — 2026-10-31
+
+### Added
+
+- **确定性诊断引擎**：从诊断包、config.env 与启动日志中识别缺失文件、引擎缺失/下载失败、prefix 初始化失败、Electron 兼容关闭、DLL/运行时失败、Rosetta、Gatekeeper、磁盘不足、主程序缺失等问题，并给出配置/高级选项/手动操作建议。
+- AI 修复新增工具：`list_known_issues`、`apply_fix`、`verify_build`；重建支持 engineMode / 运行库 / Wine Mono / 用户数据选项；重建后校验 .app、launcher、config、manifest 与 ZIP。
+- AI 面板显示确定性诊断列表（可自动修复项会标注）；诊断包与当前构建不一致时提醒重新验证。
+
+### Changed
+
+- Agent 提示词改为“先看已知问题 → apply_fix → rebuild → verify_build → finish”，网络/5xx 自动重试一次。
+
 ## 0.9.6 — 2026-10-31
 
 ### Changed

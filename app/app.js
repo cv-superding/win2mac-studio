@@ -1999,6 +1999,11 @@
         if (data.type === 'tool') aiStatusLine(`→ ${data.name} ${JSON.stringify(data.arguments || {}).slice(0, 200)}`);
         else if (data.type === 'toolResult') aiStatusLine(`  ${String(data.result || '').split('\n').slice(0, 3).join(' / ').slice(0, 300)}`);
         else if (data.type === 'assistant') aiStatusLine(`模型：${String(data.content || '').slice(0, 400)}`);
+        else if (data.type === 'issues') {
+          const list = data.issues || [];
+          aiStatusLine(`确定性诊断：${list.length} 个问题`);
+          for (const item of list.slice(0, 8)) aiStatusLine(`  [${item.severity}] ${item.title}${item.fix && (item.fix.config || item.fix.advanced) ? '（可自动修复）' : ''}`);
+        }
         else if (data.type === 'progress') aiStatusLine(`  [${data.stage}] ${data.message || ''}`);
         else if (data.type === 'step') aiStatusLine(`—— 第 ${data.step}/${data.maxSteps} 步 ——`);
       }) : () => {};

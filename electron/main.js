@@ -28,6 +28,7 @@ const { testConnection } = require('../engine/ai/client');
 const { runAgent } = require('../engine/ai/agent');
 const { createFixerTools, buildFixerPrompt } = require('../engine/ai/fixer');
 const { patchConfigText } = require('../engine/ai/config');
+const { diagnoseBundle } = require('../engine/ai/diagnose');
 const { DEFAULT_AI, normalizeAiSettings, publicAiSettings } = require('../engine/ai/settings');
 const PKG = require('../package.json');
 
@@ -237,6 +238,7 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
   if (!record) throw new Error('找不到该构建的记录，请先完成一次转换再让 AI 修复');
   const appRoot = record.platform === 'windows' ? record.result.folderPath : record.result.appPath;
   const configPath = configPathFor(record);
+  let pendingAdvanced = {};
   const allowedRoots = [appRoot, diagnostics?.dir].filter(Boolean);
   const allowedRealRoots = [];
   for (const root of allowedRoots) {
@@ -303,6 +305,28 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
     return corpus;
   };
 
+  const configTextForDiag = configPath && fs.existsSync(configPath) ? await fsp.readFile(configPath, 'utf8') : '';
+  const manifestIssues = Array.isArray(diagnostics?.report?.payload?.issues) ? diagnostics.report.payload.issues : [];
+  let logText = '';
+  for (const file of diagnostics?.logs || []) {
+    try {
+      logText += `
+===== ${path.basename(file)} =====
+${(await fsp.readFile(file, 'utf8')).slice(0, 300000)}`;
+    } catch { /* ignore */ }
+    if (logText.length > 900000) break;
+  }
+  const issues = diagnoseBundle({ report: diagnostics?.report || {}, configText: configTextForDiag, manifestIssues, logText });
+  if (diagnostics?.report?.app?.id && record.buildId && diagnostics.report.app.id !== record.buildId) {
+    issues.unshift({
+      id: 'diag-build-mismatch',
+      severity: 'info',
+      title: '诊断包来自另一次构建',
+      detail: `诊断包 buildId=${diagnostics.report.app.id}，当前构建=${record.buildId}；结论可能不适用于当前产物。`,
+      fix: { manual: ['先用当前构建在 Mac 上重新验证，再导入新的诊断包'] },
+    });
+  }
+
   return {
     appName: record.app?.name,
     buildId,
@@ -338,6 +362,50 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
       }
       return { query: needle, hits, truncated: hits.length >= max };
     },
+    knownIssues: async () => ({ issues, configPath: configPath || '' }),
+    applyFix: async (id) => {
+      const issue = issues.find((item) => item.id === id);
+      if (!issue) throw new Error(`未知问题：${id}`);
+      const result = { id, title: issue.title, manual: issue.fix?.manual || [], needsRebuild: false };
+      if (issue.fix?.config) {
+        if (!configPath || !fs.existsSync(configPath)) throw new Error('当前产物没有 config.env，无法应用配置修复');
+        const original = await fsp.readFile(configPath, 'utf8');
+        const { text, applied } = patchConfigText(original, issue.fix.config);
+        await fsp.writeFile(configPath, text, 'utf8');
+        result.config = applied;
+        result.needsRebuild = true;
+      }
+      if (issue.fix?.advanced) {
+        pendingAdvanced = { ...pendingAdvanced, ...issue.fix.advanced };
+        result.advanced = issue.fix.advanced;
+        result.needsRebuild = true;
+      }
+      if (issue.fix?.rebuild) result.needsRebuild = true;
+      return result;
+    },
+    verifyBuild: async () => {
+      const checks = [];
+      const push = (name, ok, detail = '') => checks.push({ name, ok, detail });
+      if (record.platform === 'windows') {
+        const folder = record.result?.folderPath || '';
+        push('输出目录', Boolean(folder) && fs.existsSync(folder), folder);
+        push('app.asar', Boolean(folder) && fs.existsSync(path.join(folder, 'resources', 'app.asar')));
+        push('ZIP', Boolean(record.result?.zipPath) && fs.existsSync(record.result.zipPath), record.result?.zipPath || '');
+      } else {
+        const appPath = record.result?.appPath || '';
+        const res = path.join(appPath, 'Contents', 'Resources', 'win2mac');
+        push('.app', Boolean(appPath) && fs.existsSync(appPath), appPath);
+        push('launcher', Boolean(appPath) && fs.existsSync(path.join(appPath, 'Contents', 'MacOS', 'launcher')));
+        push('config.env', fs.existsSync(path.join(res, 'config.env')));
+        let manifestCount = 0;
+        let indexCount = 0;
+        try { manifestCount = (await fsp.readFile(path.join(res, 'manifest.sha256'), 'utf8')).trim().split('\n').filter(Boolean).length; } catch { /* ignore */ }
+        try { indexCount = Math.max(0, (await fsp.readFile(path.join(res, 'payload-index.tsv'), 'utf8')).trim().split('\n').length - 1); } catch { /* ignore */ }
+        push('manifest 与索引同源', manifestCount > 0 && manifestCount === indexCount, `manifest=${manifestCount} index=${indexCount}`);
+        push('ZIP', Boolean(record.result?.zipPath) && fs.existsSync(record.result.zipPath), record.result?.zipPath || '');
+      }
+      return { ok: checks.every((item) => item.ok), checks };
+    },
     patchConfig: async (changes) => {
       if (!configPath || !fs.existsSync(configPath)) throw new Error('当前产物的 config.env 不存在，无法补丁；可直接 rebuild');
       const original = await fsp.readFile(configPath, 'utf8');
@@ -348,7 +416,7 @@ async function buildFixerContext({ buildId, diagnostics, rebuild }) {
       await fsp.writeFile(configPath, text, 'utf8');
       return { changed: true, applied, backup, note: '已修改产物内 config.env；需要调用 rebuild 才会生成包含新配置的 ZIP' };
     },
-    rebuild,
+    rebuild: async (advanced = {}) => rebuild({ ...pendingAdvanced, ...advanced }),
   };
 }
 

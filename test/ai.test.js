@@ -352,3 +352,24 @@ test('客户端拒绝超过 2 MB 的响应', async () => {
     server.close();
   }
 });
+
+test('修复 Agent 暴露确定性诊断、应用修复与构建校验工具', async () => {
+  const calls = [];
+  const tools = createFixerTools({
+    ctx: {
+      status: async () => ({}),
+      knownIssues: async () => ({ issues: [{ id: 'engine-unavailable' }] }),
+      applyFix: async (id) => { calls.push(['fix', id]); return { id, needsRebuild: true }; },
+      verifyBuild: async () => { calls.push(['verify']); return { ok: true, checks: [] }; },
+      readFile: async () => ({ text: '' }),
+      searchLogs: async () => ({ hits: [] }),
+      patchConfig: async () => ({ changed: true }),
+      rebuild: async () => ({ zipPath: 'x.zip' }),
+    },
+  });
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  assert.deepEqual(await byName.get('list_known_issues').run({}), { issues: [{ id: 'engine-unavailable' }] });
+  await byName.get('apply_fix').run({ id: 'engine-unavailable' });
+  await byName.get('verify_build').run({});
+  assert.deepEqual(calls, [['fix', 'engine-unavailable'], ['verify']]);
+});

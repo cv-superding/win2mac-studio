@@ -245,7 +245,7 @@
     isDemo: true,
     info: async () => ({
       name: 'Win2Mac Studio',
-      version: '0.9.6',
+      version: '0.10.0',
       electron: '—',
       node: '—',
       platform: 'win32',
@@ -354,7 +354,7 @@
       const recipe = {
         format: 'win2mac-recipe/v1',
         createdAt: new Date().toISOString(),
-        generator: { name: 'Win2Mac Studio', version: '0.9.6' },
+        generator: { name: 'Win2Mac Studio', version: '0.10.0' },
         app: { name: payload.app?.name || 'Demo App', publisher: payload.app?.publisher || '', version: payload.app?.version || '', exeName: 'app.exe', source: 'registry' },
         match: { name: payload.app?.name || 'Demo App', publisher: payload.app?.publisher || '', exeName: 'app.exe', bits: 64, size: payload.app?.estimatedSizeBytes || 0 },
         compatibility: { grade: payload.analysis?.grade || 'A', label: payload.analysis?.gradeLabel || '', summary: payload.analysis?.gradeSummary || '', recommendedEngine: 'wine' },
@@ -371,7 +371,7 @@
         recipe: {
           format: 'win2mac-recipe/v1',
           createdAt: new Date().toISOString(),
-          generator: { name: 'Win2Mac Studio', version: '0.9.6' },
+          generator: { name: 'Win2Mac Studio', version: '0.10.0' },
           app: { name: target.name, publisher: target.publisher, version: target.version, exeName: '7zFM.exe', source: 'registry' },
           match: { name: target.name, publisher: target.publisher, exeName: '7zFM.exe', bits: 64, size: target.estimatedSizeBytes },
           compatibility: { grade: 'A', label: '可直接运行', summary: '社区验证配方', recommendedEngine: 'wine' },
