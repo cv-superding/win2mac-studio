@@ -269,7 +269,7 @@
     if (!list.length) {
       return `<div class="list-empty">没有匹配的应用。<button class="link-btn" data-action="reset-filters">清除筛选</button></div>`;
     }
-    return `<div class="list-head"><span>应用</span><span>安装位置</span><span>架构</span><span>体积</span><span>兼容性</span><span>${state.batchMode ? '选择' : '操作'}</span></div>${list.map((app, index) => appRowHtml(app, index)).join('')}`;
+    return `${list.map((app, index) => appRowHtml(app, index)).join('')}`;
   }
 
   function emptyStateHtml() {
