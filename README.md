@@ -189,6 +189,15 @@ npm run test:e2e :: 打包/首启二启/引擎下载/安装器工作流
 
 **验证边界**：当前开发环境是 Windows 11；启动器已通过“假 Darwin + 假 Wine”、真实 tar.xz 解压与脚本级测试，并具备 macOS CI，但**仍未在物理 Mac 上启动过**。正式分发前请按 [macOS 真机验收清单](docs/MACOS-TESTING.md) 在一台 Intel 或 Apple Silicon Mac 上做一次冒烟测试（建议同时验证 CrossOver/GPTK 复用路径与 Gatekeeper 首次放行）。
 
+## macOS 版
+
+仓库同时提供 macOS 版（由 GitHub Actions `macos-14` 构建，未签名/未公证）。macOS 版用于：
+- 导入 `.app` / 含 `.app` 的 ZIP，重组为 Windows 免安装包；
+- 查看历史与设置、导出移植配方；
+- 一键诊断与 AI 修复（需自备 OpenAI 兼容接口）。
+
+注意：macOS 版**不能扫描 Windows 安装目录**，也不能把 Windows 应用打包为 `.app`（这两项需要 Windows 版）。产品主流程仍是 Windows → macOS。
+
 ## 已知限制
 
 - 不生成原生 Mach-O，不做源码重编译；性能与兼容性取决于 Wine。

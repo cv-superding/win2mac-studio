@@ -20,6 +20,11 @@
 
 ## 0.10.0 AI 修复引擎
 
+- 新增确定性诊断引擎（缺失文件、引擎、prefix、Electron、DLL、Rosetta、Gatekeeper、磁盘、主程序）。
+- Agent 工具：`list_known_issues` / `apply_fix` / `verify_build`；rebuild 支持运行库与用户数据选项；网络/5xx 重试。
+- **macOS 版**：由 `.github/workflows/mac-app.yml` 在 `macos-14` 构建 `Win2Mac-Studio-0.10.0-mac.zip`（未签名），随 Release 资产发布。macOS 版仅支持导入 `.app`/ZIP、Mac→Windows 重组与诊断，不支持扫描 Windows 安装目录。
+
+
 - 新增确定性诊断引擎：缺失文件、引擎缺失/下载失败、prefix 初始化失败、Electron 兼容关闭、DLL/运行时、Rosetta、Gatekeeper、磁盘不足、主程序缺失。
 - Agent 新工具：list_known_issues / apply_fix / verify_build；rebuild 支持运行库、Wine Mono、用户数据等选项。
 - AI 面板显示诊断问题列表；诊断包 buildId 不一致会提醒；网络/5xx 自动重试一次。

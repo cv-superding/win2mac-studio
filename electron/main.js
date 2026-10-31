@@ -1246,6 +1246,9 @@ function setupIpc() {
   });
 
   ipcMain.handle('apps:scan', async () => {
+    if (process.platform !== 'win32') {
+      throw new Error('macOS 版不支持扫描 Windows 安装目录；请使用「导入 Mac 应用」或「导入 ZIP」');
+    }
     send('scan:progress', { stage: 'start', message: '正在扫描已安装应用…' });
     const result = await runScanner({
       onProgress: (progress) => send('scan:progress', progress),

@@ -70,6 +70,14 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Win2Mac Studio"
+    },
+    "mac": {
+      "target": [
+        "zip"
+      ],
+      "category": "public.app-category.utilities",
+      "icon": "build/icon.icns",
+      "artifactName": "Win2Mac-Studio-${version}-mac.${ext}"
     }
   }
 }
