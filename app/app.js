@@ -292,8 +292,12 @@
     const list = filteredApps();
     if (!state.apps.length) {
       if (state.scanning) {
-        return `<div class="list-loading">${Array.from({ length: 6 }, () => `
-          <div class="skeleton-row"><span class="skeleton icon-s"></span><div><span class="skeleton line w1"></span><span class="skeleton line w2"></span></div><span class="skeleton line w3"></span></div>`).join('')}</div>`;
+        return `<div class="app-grid skeleton-grid" aria-hidden="true">${Array.from({ length: 6 }, () => `
+          <div class="app-card skeleton-card">
+            <div class="app-card-head"><span class="skeleton sk-icon"></span><div class="sk-lines"><span class="skeleton sk-line w60"></span><span class="skeleton sk-line w40"></span></div><span class="skeleton sk-pill"></span></div>
+            <span class="skeleton sk-path"></span>
+            <div class="app-card-foot"><span class="skeleton sk-chip"></span><span class="skeleton sk-btn"></span></div>
+          </div>`).join('')}</div>`;
       }
       if (state.scanError) return scanErrorHtml();
       return emptyStateHtml();
@@ -324,26 +328,28 @@
 
   function statsHtml() {
     const s = stats();
+    const loadingStats = !state.apps.length && state.scanning;
+    const statValue = (value) => loadingStats ? '<span class="skeleton stat-skeleton"></span>' : value;
     const pendingHint = s.pending ? (state.analysisProgress?.active ? `${s.pending} 个评估中` : `${s.pending} 个待评估`) : '';
     return `
       <div class="stat-card">
         <span class="stat-icon"><svg class="icon"><use href="#i-grid"></use></svg></span>
-        <div><div class="stat-value">${state.apps.length ? s.total : '—'}</div><div class="stat-label">已发现应用</div></div>
+        <div><div class="stat-value">${statValue(state.apps.length ? s.total : '—')}</div><div class="stat-label">已发现应用</div></div>
         <span class="stat-hint">${state.scannedAt ? timeAgo(state.scannedAt) : ''}</span>
       </div>
       <div class="stat-card">
         <span class="stat-icon green"><svg class="icon"><use href="#i-shield"></use></svg></span>
-        <div><div class="stat-value">${s.analyzed ? s.good : '—'}</div><div class="stat-label">兼容良好 · A/B</div></div>
+        <div><div class="stat-value">${statValue(s.analyzed ? s.good : '—')}</div><div class="stat-label">兼容良好 · A/B</div></div>
         <span class="stat-hint">${pendingHint}</span>
       </div>
       <div class="stat-card">
         <span class="stat-icon amber"><svg class="icon"><use href="#i-alert"></use></svg></span>
-        <div><div class="stat-value">${s.analyzed ? s.tune : '—'}</div><div class="stat-label">需要调校 · C</div></div>
+        <div><div class="stat-value">${statValue(s.analyzed ? s.tune : '—')}</div><div class="stat-label">需要调校 · C</div></div>
         <span class="stat-hint">${s.analyzed ? '建议 GPTK' : ''}</span>
       </div>
       <div class="stat-card">
         <span class="stat-icon blue"><svg class="icon"><use href="#i-cpu"></use></svg></span>
-        <div><div class="stat-value">${s.analyzed ? s.risk : '—'}</div><div class="stat-label">高风险 · D</div></div>
+        <div><div class="stat-value">${statValue(s.analyzed ? s.risk : '—')}</div><div class="stat-label">高风险 · D</div></div>
         <span class="stat-hint">${s.analyzed ? 'Wine 受限' : ''}</span>
       </div>`;
   }

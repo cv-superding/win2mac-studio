@@ -459,3 +459,41 @@ body.nav-collapsed .nav-toggle:active { transform: translateX(-50%) scale(.96); 
 
 /* Window controls: keep hover soft (no white glyph) */
 .window-btn.close:hover { background: #fde7e9; color: #c42b1c; }
+
+/* Window controls: reset legacy 62px height and center glyphs */
+.window-controls { height: 100%; align-items: center; margin: 0; }
+.window-btn { width: 46px; height: 32px; display: flex; align-items: center; justify-content: center; }
+.window-btn svg { display: block; width: 10px; height: 10px; stroke-width: 1; }
+
+/* Loading state: WinUI cards with shimmer */
+.stat-skeleton { display: inline-block; width: 38px; height: 16px; border-radius: 3px; vertical-align: middle; }
+.skeleton-grid { margin-top: 0; }
+.skeleton-card { pointer-events: none; }
+.skeleton-card .skeleton { display: block; }
+.sk-icon { width: 34px; height: 34px; border-radius: 5px; flex: none; }
+.sk-lines { flex: 1; min-width: 0; }
+.sk-line { height: 9px; border-radius: 3px; }
+.sk-line.w60 { width: 60%; }
+.sk-line.w40 { width: 40%; margin-top: 6px; }
+.sk-pill { width: 22px; height: 16px; border-radius: 3px; flex: none; }
+.sk-path { height: 22px; border-radius: 3px; }
+.app-card-foot .sk-chip { width: 66px; height: 14px; border-radius: 3px; }
+.app-card-foot .sk-btn { width: 56px; height: 24px; border-radius: 4px; }
+
+/* Scanning banner: Fluent progress */
+.scan-banner {
+  background: var(--layer);
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: none;
+}
+.scan-banner .spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(0, 103, 192, .16);
+  border-top-color: var(--primary);
+  animation: spin .75s linear infinite;
+}
+.scan-banner .bar { background: rgba(0, 103, 192, .10); height: 3px; max-width: 240px; }
+.scan-banner .bar i { background: var(--primary); width: 36%; animation: scanbar 1.1s linear infinite; }
+.scan-banner strong { font-size: 11.5px; font-weight: 600; }
