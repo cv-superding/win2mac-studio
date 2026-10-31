@@ -434,3 +434,28 @@ body.nav-collapsed .nav-toggle:active { transform: translateX(-50%) scale(.96); 
 .drop-card h3 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
 .drop-hint { background: var(--primary-soft); color: var(--primary); }
 .batch-bar { background: var(--layer); backdrop-filter: blur(18px); border-radius: 6px; box-shadow: none; }
+
+/* Soft accent buttons: avoid solid blue with white text */
+.btn-primary, .btn-accent,
+.drawer-foot .btn-primary, .modal-foot .btn-primary, .settings-foot .btn-primary,
+.ai-panel .btn-primary {
+  background: var(--primary-soft);
+  color: #005a9e;
+  border: 1px solid rgba(0, 103, 192, .22);
+}
+.btn-primary:hover, .btn-accent:hover,
+.drawer-foot .btn-primary:hover, .modal-foot .btn-primary:hover, .settings-foot .btn-primary:hover,
+.ai-panel .btn-primary:hover {
+  background: rgba(0, 103, 192, .15);
+  color: #00457c;
+}
+.row-convert {
+  background: var(--primary-soft);
+  color: #005a9e;
+  border: 1px solid rgba(0, 103, 192, .22);
+  box-shadow: none;
+}
+.row-convert:hover { background: rgba(0, 103, 192, .15); color: #00457c; }
+
+/* Window controls: keep hover soft (no white glyph) */
+.window-btn.close:hover { background: #fde7e9; color: #c42b1c; }

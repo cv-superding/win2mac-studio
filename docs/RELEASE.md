@@ -1,4 +1,4 @@
-# Win2Mac Studio 0.9.1
+# Win2Mac Studio 0.9.2
 
 构建日期：2026-10-29 · Windows x64 · Electron 44.9.0
 
@@ -6,17 +6,22 @@
 
 | 文件 | 说明 |
 |---|---|
-| `release/Win2Mac-Studio-Setup-0.9.1.exe` | NSIS 安装程序（未签名） |
-| `release/win-unpacked-0.9.1/Win2Mac Studio.exe` | 免安装运行版（用于冒烟测试） |
-| `release/Win2Mac-MacCheck-0.9.1.zip` | 可独立发送的 Mac 验证工具包 |
+| `release/Win2Mac-Studio-Setup-0.9.2.exe` | NSIS 安装程序（未签名） |
+| `release/win-unpacked-0.9.2/Win2Mac Studio.exe` | 免安装运行版（用于冒烟测试） |
+| `release/Win2Mac-MacCheck-0.9.2.zip` | 可独立发送的 Mac 验证工具包 |
 | `release/SHA256SUMS.txt` | 以上三者 SHA-256 |
 
-- 安装包大小：120,890,374 bytes（约 115.3 MiB）
-- 安装包 SHA-256：`e28b2028233f87b4412d71cd59f3f18516d2e955e310c86e67576842a9f44dc6`
-- 便携版 EXE SHA-256：`273e59b697a797a5f75f1110471d36795ebe4dbe2d4ab77cdc74d8d812174252`
-- MacCheck ZIP SHA-256：`e733ea7ce4f6d1eeed2151604e5fa00e9c5bac3476ee470e1f7fa53c9ca5c32a`
-- 打包后 smoke：`version=0.9.1, bridge=true, nav=4, cacheGroups=3, ai.leaked=false`；ZIP 导入选中 `Smoke Fixture.exe`
+- 安装包大小：120,890,650 bytes（约 115.3 MiB）
+- 安装包 SHA-256：`199ce655179865526e338611ef0c434c95ce1935dd511a8a37ef05858ff2e753`
+- 便携版 EXE SHA-256：`808b948397666e59c45ff8bd1d1a27dc1b7e5866491cf90358dce2eea468f72c`
+- MacCheck ZIP SHA-256：`ec8d08b366decd7203ee2c2bb470400c5ebf77534f27eae7d969c6493eb13730`
+- 打包后 smoke：`version=0.9.2, bridge=true, nav=4, cacheGroups=3, ai.leaked=false`；ZIP 导入选中 `Smoke Fixture.exe`
 - 真实 IPC UI 扫描 smoke：`174 apps / 174 icons / 0 pending / 0 scanError`
+
+## 0.9.2 强调按钮配色
+
+- 「扫描 / 转换 / 重新扫描 / 开始打包」改为 WinUI 柔和强调：浅蓝底 + 深蓝字，不再蓝底白字。
+- 窗口关闭按钮 hover 改为浅红底 + 深红图标。
 
 ## 0.9.1 自查修复
 
@@ -135,19 +140,19 @@
 
 诊断 ZIP 包含完整报告、系统/机型/CPU/显卡信息（过滤序列号等）、Info.plist、config.env、bundle.json、manifest、该应用 Wine 日志与失败时的 Integrity.log；不含应用 payload。
 
-独立工具包：`release/Win2Mac-MacCheck-0.9.1.zip`。
+独立工具包：`release/Win2Mac-MacCheck-0.9.2.zip`。
 
 ## 验证结果
 
 - 单元测试 52/52：新增“运行库直接调用、不用 start /wait”“arm64 引擎跳过 Rosetta”“服务依赖用合成 PE”等回归；ZIP 解压、恶意路径、配方/拖拽/缓存/Darwin 启动器/Mac 验证收集器/LF 行尾测试继续通过。
 - E2E 通过：notepad 打包、ZIP UTF-8/0755、注册表、内置引擎、运行时下载/SHA/缓存、VC++、安装器、CLI 配方构建；新增“引擎路径不能被日志污染”断言。
-- 打包后 smoke（0.9.1 便携版）：`archive.exe=Smoke Fixture.exe`、不含 `Uninstall`，`bridge=true / nav=4 / cacheGroups=3`。
+- 打包后 smoke（0.9.2 便携版）：`archive.exe=Smoke Fixture.exe`、不含 `Uninstall`，`bridge=true / nav=4 / cacheGroups=3`。
 - 真实 IPC 扫描：174 应用、174 图标、0 待分析、0 scanError。
 - 用实际 `客源雷达` ZIP（109 文件，根目录含 210 MB 主程序与 517 KB 卸载器）复现：主程序识别为 `客源雷达.exe`。
 
 ## 安装与运行
 
-1. 运行 `Win2Mac-Studio-Setup-0.9.1.exe`。安装包未签名，SmartScreen 可能要求“更多信息 → 仍要运行”。
+1. 运行 `Win2Mac-Studio-Setup-0.9.2.exe`。安装包未签名，SmartScreen 可能要求“更多信息 → 仍要运行”。
 2. 转换后把 ZIP 原样拷到 Mac，用 Finder 解压，双击 `Open-Win2Mac-App.command`。
 3. 若朋友侧报错，让他双击 `Start-Mac-Validation.command`，把桌面诊断 ZIP 发回。
 
