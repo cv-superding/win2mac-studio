@@ -358,7 +358,8 @@ function createWindow() {
     minHeight: 680,
     show: false,
     frame: false,
-    backgroundColor: '#f7f6f2',
+    backgroundColor: '#00000000',
+    backgroundMaterial: process.platform === 'win32' ? 'mica' : undefined,
     title: 'Win2Mac Studio',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -780,6 +781,7 @@ function setupIpc() {
       node: process.versions.node,
       platform: process.platform,
       arch: process.arch,
+      mica: process.platform === 'win32',
       maximized: Boolean(mainWindow?.isMaximized()),
       userData: appDataDir(),
       settings: publicSettings(settings),

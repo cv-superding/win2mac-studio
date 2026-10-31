@@ -7,22 +7,28 @@
 <title>Win2Mac Studio</title>
 <link rel="icon" href="assets/icon.png">
 <link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="theme-aurora.css">
+<link rel="stylesheet" href="theme-winui.css">
 </head>
 <body>
+<div class="app-bg" aria-hidden="true"></div>
 <div class="frame">
-  <header class="app-header">
-    <div class="header-drag"></div>
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 40 40"><rect x="3" y="3" width="24" height="24" rx="7" fill="#4F46E5"/><rect x="13" y="13" width="24" height="24" rx="7" fill="#0B1020" stroke="#F3F5F9" stroke-width="2.4"/><path d="M20.5 20.5l5.5 5.5m0-5.5L20.5 26" stroke="#22D3EE" stroke-width="2.2" stroke-linecap="round"/></svg>
-      </span>
-      <span class="brand-text">
-        <strong>Win2Mac Studio</strong>
-        <small>APP PORTER</small>
-      </span>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40"><rect x="3" y="3" width="24" height="24" rx="7" fill="#0067C0"/><rect x="13" y="13" width="24" height="24" rx="7" fill="#0B1020" stroke="#F3F3F3" stroke-width="2.4"/><path d="M20.5 20.5l5.5 5.5m0-5.5L20.5 26" stroke="#4CC2FF" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </span>
+        <span class="brand-text">
+          <strong>Win2Mac Studio</strong>
+          <small>APP PORTER</small>
+        </span>
+      </div>
+      <button class="nav-toggle" data-action="toggle-nav" aria-label="折叠侧栏" title="折叠侧栏">
+        <svg class="icon"><use href="#i-chevron"></use></svg>
+      </button>
     </div>
 
+    <div class="sidebar-group">工作区</div>
     <nav class="nav" aria-label="主导航">
       <button class="nav-item" data-nav="library" title="应用库">
         <svg class="icon"><use href="#i-grid"></use></svg><span>应用库</span>
@@ -38,18 +44,20 @@
       </button>
     </nav>
 
-    <div class="header-right">
-      <span class="runtime-pill" title="Wine 运行时">
-        <span class="status-dot"></span>
-        <span id="runtime-version">11.18</span>
-        <span class="runtime-caption" id="runtime-caption">x86_64 · 开源引擎</span>
-      </span>
+    <div class="sidebar-foot">
+      <div class="runtime-card" title="Wine 运行时">
+        <div class="runtime-row">
+          <span class="status-dot"></span>
+          <span class="runtime-label">Wine 运行时</span>
+          <span class="runtime-ver" id="runtime-version">11.18</span>
+        </div>
+        <p id="runtime-caption">开源引擎已锁定 · x86_64</p>
+      </div>
       <div class="mode-chip" id="mode-chip">
         <span class="mode-dot"></span><span id="mode-label">本机模式</span>
       </div>
-
     </div>
-  </header>
+  </aside>
 
   <div class="main-area">
     <header class="topbar">

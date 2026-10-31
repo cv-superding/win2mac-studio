@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 — 2026-10-29
+
+### Changed
+
+- **WinUI 3 / Fluent 主题**：启用 Windows 11 Mica（`backgroundMaterial: mica`）+ 半透明云母层/亚克力卡片，Win11 中性配色 + 系统蓝强调色，去除多余阴影（仅 1px 描边）。
+- **可折叠左侧栏**：236px ↔ 60px，底部折叠按钮，状态写入 localStorage；折叠后仅保留图标与角标。
+- 顶栏回归 Win11 标题栏布局（标题/搜索/操作/窗口按钮），页面内容全宽。
+- 应用卡片、设置单列、抽屉、弹窗、toast 全部换成 Fluent 圆角与描边体系。
+
 ## 0.8.0 — 2026-10-29
 
 ### Changed

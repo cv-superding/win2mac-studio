@@ -97,6 +97,7 @@
     archiveProgress: null,
     archiveImporting: false,
     listEntered: false,
+    navCollapsed: false,
     cacheStats: null,
     cacheLoading: false,
     cacheError: null,
@@ -2728,8 +2729,29 @@
     }
   }
 
+  function applyNavState() {
+    document.body.classList.toggle('nav-collapsed', state.navCollapsed);
+    const toggle = document.querySelector('.nav-toggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', state.navCollapsed ? 'false' : 'true');
+      toggle.title = state.navCollapsed ? '展开侧栏' : '折叠侧栏';
+      toggle.setAttribute('aria-label', toggle.title);
+    }
+  }
+
+  function toggleNav() {
+    state.navCollapsed = !state.navCollapsed;
+    try {
+      localStorage.setItem('win2mac-nav-collapsed', state.navCollapsed ? '1' : '0');
+    } catch { /* storage may be unavailable */ }
+    applyNavState();
+  }
+
   function handleAction(action, element) {
     switch (action) {
+      case 'toggle-nav':
+        toggleNav();
+        break;
       case 'scan':
         scan();
         break;
@@ -3069,6 +3091,10 @@
   if (api.onWindowState) api.onWindowState(() => {});
 
   async function init() {
+    try {
+      state.navCollapsed = localStorage.getItem('win2mac-nav-collapsed') === '1';
+    } catch { /* ignore */ }
+    applyNavState();
     const smokeMode = new URLSearchParams(location.search).has('smoke');
     try {
       const [info, settings, history] = await Promise.all([api.info(), api.getSettings(), api.history()]);
