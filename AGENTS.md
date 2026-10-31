@@ -30,7 +30,7 @@ Win2Mac Studio：在 **Windows 10/11** 上把已安装的 Windows 应用打包�
 | `npm run brand` | 重新生成 `build/icon.*` |
 | `node cli.js scan\|analyze\|build\|engines ...` | 无界面流程，参数见 `cli.js` 顶部 usage |
 
-验证阈值：提交前 `npm test` 必须全绿（当前 80 项）；改动打包路径时额外跑 `npm run test:e2e`。
+验证阈值：提交前 `npm test` 必须全绿（当前 86 项）；改动打包路径时额外跑 `npm run test:e2e`。
 
 ## 代码地图
 
