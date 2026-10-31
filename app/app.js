@@ -384,43 +384,18 @@
     const sort = state.filters.sort;
     view.innerHTML = `
       <div class="page">
-        <section class="library-hero">
-          <div class="hero-copy">
-            <div class="eyebrow">Windows → macOS</div>
-            <h1>把 Windows 应用，<br>装进一个 <span class="accent">.app</span>。</h1>
-            <p>原文件逐字节保留，自动生成 macOS 应用包与 Wine 运行环境。先看清兼容性，再一次完成转换。</p>
-            <div class="hero-actions">
-              <button class="btn btn-accent btn-lg" data-action="scan" ${state.scanning ? 'disabled' : ''}>
-                <svg class="icon"><use href="#i-${state.scanning ? 'refresh' : 'search'}"></use></svg>${state.scanning ? '扫描中…' : state.apps.length ? '重新扫描应用' : '扫描已安装应用'}
-              </button>
-              <button class="btn btn-ghost btn-lg" data-action="pick-exe"><svg class="icon"><use href="#i-file"></use></svg>选择 .exe 文件</button>
-              <button class="btn btn-ghost btn-lg" data-action="pick-installer"><svg class="icon"><use href="#i-package"></use></svg>从安装包创建</button>
-            </div>
-            <div class="hero-note"><svg class="icon"><use href="#i-lock"></use></svg>不上传应用 · 不修改原安装 · 产物在本机生成</div>
+        <section class="page-head">
+          <div>
+            <div class="eyebrow">WINDOWS → MACOS</div>
+            <h1>把 Windows 应用装进 .app</h1>
+            <p>原文件逐字节保留 · 自动分析兼容性 · 产物在本机生成；也可把 .app 反向重组为 Windows 版</p>
           </div>
-          <div class="hero-flow" aria-hidden="true">
-            <div class="flow-step is-done"><span>01</span><b>扫描</b><small>注册表 · 开始菜单 · 服务</small></div>
-            <div class="flow-step is-done"><span>02</span><b>评估</b><small>A–D 兼容性分级</small></div>
-            <div class="flow-step"><span>03</span><b>打包</b><small>.app + ZIP + 完整性清单</small></div>
-            <div class="flow-step"><span>04</span><b>验证</b><small>Mac 一键诊断与 AI 修复</small></div>
-          </div>
-          <div class="hero-stage" aria-hidden="true">
-            <div class="stage-win">
-              <div class="stage-bar"><i></i><i></i><i></i><span>WIN32 · X64</span></div>
-              <div class="stage-tiles"><b></b><b></b><b></b><b></b></div>
-              <div class="stage-caption"><span>MyApp.exe</span><span>NATIVE PAYLOAD</span></div>
-            </div>
-            <span class="stage-transfer"><svg class="icon"><use href="#i-arrow-right"></use></svg>WINDOWS → MAC</span>
-            <div class="stage-mac">
-              <div class="stage-bar"><i></i><i></i><i></i><span>.APP BUNDLE</span></div>
-              <div class="mac-app-row">
-                <span class="mac-icon">W</span>
-                <div><div class="mac-name">MyApp</div><div class="mac-sub">macOS Application</div></div>
-                <span class="mac-tag">WINE</span>
-              </div>
-            </div>
-            <span class="stage-chip one">SHA-256 VERIFIED</span>
-            <span class="stage-chip two">Wine 11.18</span>
+          <div class="page-head-actions">
+            <button class="btn btn-primary btn-lg" data-action="scan" ${state.scanning ? 'disabled' : ''}>
+              <svg class="icon"><use href="#i-${state.scanning ? 'refresh' : 'search'}"></use></svg>${state.scanning ? '扫描中…' : state.apps.length ? '重新扫描应用' : '扫描已安装应用'}
+            </button>
+            <button class="btn btn-ghost btn-lg" data-action="pick-exe"><svg class="icon"><use href="#i-file"></use></svg>选择 .exe</button>
+            <button class="btn btn-ghost btn-lg" data-action="pick-installer"><svg class="icon"><use href="#i-package"></use></svg>从安装包</button>
           </div>
         </section>
 

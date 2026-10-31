@@ -8,7 +8,7 @@
 {
   "format": "win2mac-recipe/v1",
   "createdAt": "2026-10-28T08:00:00.000Z",
-  "generator": { "name": "Win2Mac Studio", "version": "0.7.0" },
+  "generator": { "name": "Win2Mac Studio", "version": "0.8.0" },
   "app": {
     "name": "7-Zip",
     "publisher": "Igor Pavlov",
