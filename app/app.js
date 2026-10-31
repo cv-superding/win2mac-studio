@@ -256,6 +256,37 @@
       </div>`;
   }
 
+
+  function appCardHtml(app, index = 0) {
+    const metadata = [app.publisher, app.version ? `v${app.version}` : ''].filter(Boolean).join(' · ') || '未提供发布信息';
+    const path = app.installPath || app.exePath || '';
+    const size = app.estimatedSizeBytes || app.analysis?.directory?.scannedBytes || 0;
+    const isMac = app.platform === 'mac';
+    const canConvert = Boolean(app.analysis && (app.exePath || isMac) && (!isMac || api.buildWindowsApp));
+    const convertTitle = isMac ? '转换为 Windows 免安装版' : '一键转换为 .app';
+    const arch = app.arch === 'x64' ? 'x64' : app.arch === 'x86' ? 'x86' : app.arch === 'arm64' ? 'ARM64' : isMac && app.arch ? String(app.arch).toUpperCase() : '—';
+    return `
+      <article class="app-card${state.listEntered ? '' : ' row-enter'}"${state.listEntered ? '' : ` style="animation-delay:${Math.min(index, 8) * 28}ms"`} role="button" tabindex="0" data-app-id="${esc(app.id)}" data-app-row="${esc(app.id)}" aria-label="查看 ${esc(app.name)}">
+        <div class="app-card-head">
+          ${iconHtml(app)}
+          <div class="app-card-title">
+            <b>${esc(app.name)}</b>
+            <span>${esc(metadata)}</span>
+          </div>
+          ${gradeBadge(app, true)}
+        </div>
+        <div class="app-card-path"><span class="path" title="${esc(path)}">${esc(path)}</span></div>
+        <div class="app-card-foot">
+          <div class="app-card-tags">
+            <span class="arch-chip">${esc(arch)}</span>
+            <span class="size-cell">${fmtBytes(size)}</span>
+            <span class="app-card-source">${esc(sourceLabel(app))}</span>
+          </div>
+          <button class="row-convert" data-action="convert-app" data-convert-id="${esc(app.id)}" aria-label="转换 ${esc(app.name)}" title="${esc(convertTitle)}" ${canConvert ? '' : 'disabled'}><svg class="icon"><use href="#i-play"></use></svg><span>转换</span></button>
+        </div>
+      </article>`;
+  }
+
   function listHtml() {
     const list = filteredApps();
     if (!state.apps.length) {
@@ -269,7 +300,8 @@
     if (!list.length) {
       return `<div class="list-empty">没有匹配的应用。<button class="link-btn" data-action="reset-filters">清除筛选</button></div>`;
     }
-    return `${list.map((app, index) => appRowHtml(app, index)).join('')}`;
+    if (state.batchMode) return `${list.map((app, index) => appRowHtml(app, index)).join('')}`;
+    return `<div class="app-grid">${list.map((app, index) => appCardHtml(app, index)).join('')}</div>`;
   }
 
   function emptyStateHtml() {
@@ -365,6 +397,12 @@
               <button class="btn btn-ghost btn-lg" data-action="pick-installer"><svg class="icon"><use href="#i-package"></use></svg>从安装包创建</button>
             </div>
             <div class="hero-note"><svg class="icon"><use href="#i-lock"></use></svg>不上传应用 · 不修改原安装 · 产物在本机生成</div>
+          </div>
+          <div class="hero-flow" aria-hidden="true">
+            <div class="flow-step is-done"><span>01</span><b>扫描</b><small>注册表 · 开始菜单 · 服务</small></div>
+            <div class="flow-step is-done"><span>02</span><b>评估</b><small>A–D 兼容性分级</small></div>
+            <div class="flow-step"><span>03</span><b>打包</b><small>.app + ZIP + 完整性清单</small></div>
+            <div class="flow-step"><span>04</span><b>验证</b><small>Mac 一键诊断与 AI 修复</small></div>
           </div>
           <div class="hero-stage" aria-hidden="true">
             <div class="stage-win">
