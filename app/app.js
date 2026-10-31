@@ -473,7 +473,7 @@
   function updateAppRow(app) {
     const row = document.querySelector(`[data-app-row="${CSS.escape(app.id)}"]`);
     if (row) {
-      row.outerHTML = appRowHtml(app);
+      row.outerHTML = state.batchMode ? appRowHtml(app) : appCardHtml(app);
     } else if (state.page === 'library') {
       updateList();
     }
