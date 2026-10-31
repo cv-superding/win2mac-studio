@@ -1347,9 +1347,7 @@
     const mode = s.engineMode || 'auto';
     view.innerHTML = `
       <div class="page">
-        <div class="page-head">
-          <div class="page-head-copy"><div class="eyebrow">Preferences</div><h1>设置</h1><p>这些默认值会带入每一次新的转换任务。</p></div>
-        </div>
+        <p class="page-intro">这些默认值会带入每一次新的转换任务。</p>
         <div class="settings-grid">
           <section class="settings-card">
             <h2>输出位置</h2>

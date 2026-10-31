@@ -17,7 +17,7 @@
 
 ## 1. 拷贝与解压
 
-1. 把 `release/Win2Mac-Studio-Setup-0.9.0.exe` 生成的 ZIP 原样拷到 Mac（不要经过会重写文件的同步盘）。
+1. 把 `release/Win2Mac-Studio-Setup-0.9.1.exe` 生成的 ZIP 原样拷到 Mac（不要经过会重写文件的同步盘）。
 2. 用 **Finder** 双击解压。
 3. 进入解压目录，先运行：
 

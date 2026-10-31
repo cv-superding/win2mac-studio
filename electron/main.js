@@ -31,6 +31,8 @@ const { patchConfigText } = require('../engine/ai/config');
 const { DEFAULT_AI, normalizeAiSettings, publicAiSettings } = require('../engine/ai/settings');
 const PKG = require('../package.json');
 
+const winBuild = Number(String(os.release()).split('.')[2] || 0);
+const supportsMica = process.platform === 'win32' && winBuild >= 22000;
 const isDev = process.argv.includes('--dev');
 const isSmokeScan = process.argv.includes('--smoke-scan');
 const isSmoke = process.argv.includes('--smoke-test') || isSmokeScan;
@@ -358,8 +360,8 @@ function createWindow() {
     minHeight: 680,
     show: false,
     frame: false,
-    backgroundColor: '#00000000',
-    backgroundMaterial: process.platform === 'win32' ? 'mica' : undefined,
+    backgroundColor: supportsMica ? '#00000000' : '#f3f3f3',
+    backgroundMaterial: supportsMica ? 'mica' : undefined,
     title: 'Win2Mac Studio',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -386,6 +388,15 @@ function createWindow() {
           await fsp.writeFile(path.join(smokeFixture, 'Uninstall Smoke Fixture.exe'), Buffer.alloc(7000, 8));
           result.cacheGroups = await mainWindow.webContents.executeJavaScript('window.win2mac.cacheStats().then((stats) => stats.groups.length)');
           result.aiSettings = await mainWindow.webContents.executeJavaScript('Promise.all([window.win2mac.getSettings(), window.win2mac.info()]).then(([s, info]) => ({ hasKey: Boolean(s.ai && s.ai.hasKey), leaked: Boolean(s.ai && Object.prototype.hasOwnProperty.call(s.ai, "apiKey")) || Boolean(info.settings?.ai && Object.prototype.hasOwnProperty.call(info.settings.ai, "apiKey")) }))');
+          result.ui = await mainWindow.webContents.executeJavaScript(`(() => {
+            const link = Boolean(document.querySelector('link[href$="theme-winui.css"]'));
+            const toggle = document.querySelector('[data-action="toggle-nav"]');
+            if (toggle) toggle.click();
+            const collapsed = document.body.classList.contains('nav-collapsed');
+            if (toggle) toggle.click();
+            const restored = !document.body.classList.contains('nav-collapsed');
+            return { link, collapsed, restored };
+          })()`);
           const dropped = await mainWindow.webContents.executeJavaScript(`window.win2mac.inspectPath(${JSON.stringify(smokeFixture)}).then((payload) => ({ name: payload?.app?.name || '', kind: payload?.kind || '', exe: payload?.app?.exePath || '' }))`);
           result.drop = dropped;
           const smokeZip = path.join(appDataDir(), 'smoke-fixture.zip');
@@ -441,6 +452,9 @@ function createWindow() {
           && navCount >= 4
           && result.cacheGroups >= 3
           && result.aiSettings?.leaked === false
+          && result.ui?.link === true
+          && result.ui?.collapsed === true
+          && result.ui?.restored === true
           && result.drop?.name
           && result.archive?.source === 'archive'
           && /Smoke Fixture\.exe$/.test(result.archive?.exe || '')
@@ -781,7 +795,7 @@ function setupIpc() {
       node: process.versions.node,
       platform: process.platform,
       arch: process.arch,
-      mica: process.platform === 'win32',
+      mica: supportsMica,
       maximized: Boolean(mainWindow?.isMaximized()),
       userData: appDataDir(),
       settings: publicSettings(settings),

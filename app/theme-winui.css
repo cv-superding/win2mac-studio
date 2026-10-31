@@ -197,12 +197,14 @@ body.nav-collapsed .runtime-label { display: none; }
 .window-btn { width: 46px; height: 32px; display: grid; place-items: center; color: var(--ink-2); }
 .window-btn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
 .window-btn:hover { background: rgba(0, 0, 0, .06); }
+.window-btn:active { transform: none; }
 .window-btn.close:hover { background: #c42b1c; color: #fff; }
 
 .view { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 22px 64px; }
 #view > .page { max-width: 1280px; margin: 0 auto; padding-top: 14px; }
 
 /* ---------- Page head ---------- */
+.page-intro { margin: 2px 2px 12px; color: var(--muted); font-size: 11.5px; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 4px 2px 14px; }
 .page-head .eyebrow {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
@@ -404,3 +406,31 @@ body.nav-collapsed .runtime-label { display: none; }
   .frame { transition: none; }
   .nav-toggle .icon { transition: none; }
 }
+
+/* Collapsed sidebar: keep only a status dot */
+body.nav-collapsed .runtime-card { display: none; }
+body.nav-collapsed .sidebar-foot { padding-bottom: 44px; }
+body.nav-collapsed .sidebar-foot::after {
+  content: ""; display: block; width: 7px; height: 7px; margin: 0 auto;
+  border-radius: 50%; background: #0f7b3d;
+}
+.view::-webkit-scrollbar { width: 8px; height: 8px; }
+
+.nav-toggle:active { transform: scale(.96); }
+body.nav-collapsed .nav-toggle:active { transform: translateX(-50%) scale(.96); }
+
+/* Drag overlay: Fluent drop target */
+.drop-overlay { background: rgba(0, 0, 0, .28); backdrop-filter: blur(8px); }
+.drop-card {
+  border: 2px dashed var(--primary);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .84);
+  backdrop-filter: blur(30px) saturate(1.2);
+  box-shadow: var(--shadow-dialog);
+  transform: scale(.985);
+}
+.drop-overlay.visible .drop-card { transform: none; }
+.drop-visual { background: var(--primary); color: #fff; border-radius: 6px; box-shadow: none; }
+.drop-card h3 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.drop-hint { background: var(--primary-soft); color: var(--primary); }
+.batch-bar { background: var(--layer); backdrop-filter: blur(18px); border-radius: 6px; box-shadow: none; }
